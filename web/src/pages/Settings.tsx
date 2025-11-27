@@ -246,7 +246,7 @@ export default function Settings() {
       const response = await api.post('/settings/detect-scripts', { path })
       return response.data
     },
-    onSuccess: (data) => {
+    onSuccess: (data: { scripts?: string[] }) => {
       setSettings(prev => ({
         ...prev,
         build: {

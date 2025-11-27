@@ -2300,6 +2300,67 @@ async def git_status_simple_endpoint(
         }
 
 
+@app.get("/api/stats/active-users", response_model=dict)
+async def active_users_endpoint(
+    env: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """Get active users/sessions count for an environment"""
+    try:
+        import psycopg2
+        from health import get_database_url_from_env
+        
+        project_path = settings.DEV_DIR if env == "dev" else settings.PROD_DIR
+        database_url = get_database_url_from_env(project_path, env)
+        
+        if not database_url:
+            return {"active_users": 0, "active_sessions": 0, "error": "No database URL found"}
+        
+        conn = psycopg2.connect(database_url, connect_timeout=5)
+        cursor = conn.cursor()
+        
+        # Try to get active sessions (adjust table/column names as needed)
+        active_sessions = 0
+        active_users = 0
+        
+        try:
+            # Check for Session table (common in Next-Auth)
+            cursor.execute("""
+                SELECT COUNT(*) FROM "Session" 
+                WHERE expires > NOW()
+            """)
+            active_sessions = cursor.fetchone()[0]
+        except:
+            pass
+        
+        try:
+            # Check for active users in last 15 minutes
+            cursor.execute("""
+                SELECT COUNT(DISTINCT "userId") FROM "Session" 
+                WHERE expires > NOW() 
+                AND "createdAt" > NOW() - INTERVAL '15 minutes'
+            """)
+            active_users = cursor.fetchone()[0]
+        except:
+            # Fallback: just use session count
+            active_users = active_sessions
+        
+        cursor.close()
+        conn.close()
+        
+        return {
+            "active_users": active_users,
+            "active_sessions": active_sessions,
+            "env": env
+        }
+    except Exception as e:
+        return {
+            "active_users": 0,
+            "active_sessions": 0,
+            "error": str(e)
+        }
+
+
 # ============= BUILDMASTER SETTINGS ENDPOINTS =============
 
 @app.get("/api/buildmaster/settings", response_model=dict)

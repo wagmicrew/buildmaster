@@ -17,7 +17,8 @@ import {
   RefreshCw,
   Rocket,
   Code,
-  Globe
+  Globe,
+  Users
 } from 'lucide-react'
 
 interface EnvironmentStats {
@@ -47,6 +48,10 @@ interface EnvironmentStats {
   database: {
     status: 'connected' | 'disconnected'
     responseTime: string
+  }
+  activeUsers: {
+    users: number
+    sessions: number
   }
 }
 
@@ -130,10 +135,11 @@ export default function Dashboard() {
   const { data: devStats } = useQuery({
     queryKey: ['dev-stats'],
     queryFn: async (): Promise<EnvironmentStats> => {
-      const [health, git, buildStatus] = await Promise.all([
+      const [health, git, buildStatus, activeUsers] = await Promise.all([
         api.get('/health/server?env=dev'),
         api.get('/git/status?env=dev'),
-        api.get('/build/status').catch(() => ({ data: { status: 'none' } }))
+        api.get('/build/status').catch(() => ({ data: { status: 'none' } })),
+        api.get('/stats/active-users?env=dev').catch(() => ({ data: { active_users: 0, active_sessions: 0 } }))
       ])
 
       const formatUptime = (seconds: number) => {
@@ -170,6 +176,10 @@ export default function Dashboard() {
         database: {
           status: health.data.database?.status === 'connected' ? 'connected' : 'disconnected',
           responseTime: health.data.database?.response_time || 'N/A'
+        },
+        activeUsers: {
+          users: activeUsers.data.active_users || 0,
+          sessions: activeUsers.data.active_sessions || 0
         }
       }
     },
@@ -180,9 +190,10 @@ export default function Dashboard() {
   const { data: prodStats } = useQuery({
     queryKey: ['prod-stats'],
     queryFn: async (): Promise<EnvironmentStats> => {
-      const [health, git] = await Promise.all([
+      const [health, git, activeUsers] = await Promise.all([
         api.get('/health/server?env=prod'),
-        api.get('/git/status?env=prod')
+        api.get('/git/status?env=prod'),
+        api.get('/stats/active-users?env=prod').catch(() => ({ data: { active_users: 0, active_sessions: 0 } }))
       ])
 
       const formatUptime = (seconds: number) => {
@@ -219,6 +230,10 @@ export default function Dashboard() {
         database: {
           status: health.data.database?.status === 'connected' ? 'connected' : 'disconnected',
           responseTime: health.data.database?.response_time || 'N/A'
+        },
+        activeUsers: {
+          users: activeUsers.data.active_users || 0,
+          sessions: activeUsers.data.active_sessions || 0
         }
       }
     },
@@ -317,13 +332,21 @@ export default function Dashboard() {
           </div>
 
           {/* Stats Grid */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div className={`p-4 rounded-xl ${iconBg}`}>
               <div className="flex items-center gap-2 mb-1">
                 <Clock className={iconColor} size={16} />
                 <span className="text-slate-400 text-xs">Uptime</span>
               </div>
               <span className="text-white font-semibold">{stats.uptime}</span>
+            </div>
+            <div className={`p-4 rounded-xl ${iconBg}`}>
+              <div className="flex items-center gap-2 mb-1">
+                <Users className={iconColor} size={16} />
+                <span className="text-slate-400 text-xs">Active Users</span>
+              </div>
+              <span className="text-white font-semibold text-lg">{stats.activeUsers.users}</span>
+              <span className="text-slate-400 text-xs ml-1">({stats.activeUsers.sessions} sessions)</span>
             </div>
             <div className={`p-4 rounded-xl ${iconBg}`}>
               <div className="flex items-center gap-2 mb-1">

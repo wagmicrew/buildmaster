@@ -83,6 +83,34 @@ async def deploy_to_production(request: DeployGoLiveRequest) -> DeployGoLiveResp
                 shutil.rmtree(prod_public)
             shutil.copytree(dev_public, prod_public)
         
+        # Copy Prisma schema and run migrations on prod database
+        prisma_schema = dev_dir / "prisma" / "schema.prisma"
+        if prisma_schema.exists():
+            prod_prisma_dir = prod_dir / "prisma"
+            prod_prisma_dir.mkdir(exist_ok=True)
+            shutil.copy2(prisma_schema, prod_prisma_dir / "schema.prisma")
+            
+            # Copy migration files
+            dev_migrations = dev_dir / "prisma" / "migrations"
+            if dev_migrations.exists():
+                prod_migrations = prod_dir / "prisma" / "migrations"
+                if prod_migrations.exists():
+                    shutil.rmtree(prod_migrations)
+                shutil.copytree(dev_migrations, prod_migrations)
+            
+            # Run prisma migrate deploy on production
+            migrate_result = subprocess.run(
+                ["npx", "prisma", "migrate", "deploy"],
+                cwd=str(prod_dir),
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            
+            if migrate_result.returncode != 0:
+                # Log but don't fail - migrations might already be applied
+                print(f"Prisma migrate warning: {migrate_result.stderr}")
+        
         # Restart production PM2 process
         pm2_result = await restart_pm2_app(settings.PM2_PROD_APP)
         
