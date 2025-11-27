@@ -1,0 +1,85 @@
+{
+  "development": {
+    "path": "/var/www/your-app-dev",
+    "git": {
+      "remote": "origin",
+      "branch": "main",
+      "autoDetected": true
+    }
+  },
+  "production": {
+    "path": "/var/www/your-app-prod",
+    "git": {
+      "remote": "origin",
+      "branch": "main",
+      "autoDetected": true
+    }
+  },
+  "database": {
+    "useLocalhost": true,
+    "host": "localhost",
+    "port": 5432,
+    "masterUser": "postgres",
+    "masterPassword": "",
+    "devDatabase": "your_app_dev",
+    "prodDatabase": "your_app_prod",
+    "sslMode": "prefer"
+  },
+  "build": {
+    "autoDetect": true,
+    "detectedScripts": [],
+    "devBuildScript": "npm run build",
+    "prodBuildScript": "npm run build",
+    "buildDirectory": "",
+    "outputDirectory": ".next"
+  },
+  "pm2": {
+    "dev": {
+      "name": "your-app-dev",
+      "mode": "fork",
+      "instances": 1,
+      "maxMemory": "512M",
+      "autoRestart": true,
+      "watchEnabled": false
+    },
+    "prod": {
+      "name": "your-app-prod",
+      "mode": "cluster",
+      "instances": 4,
+      "maxMemory": "1G",
+      "autoRestart": true,
+      "watchEnabled": false
+    }
+  },
+  "nginx": {
+    "dev": {
+      "siteName": "your-app-dev",
+      "configPath": "/etc/nginx/sites-available/your-app-dev",
+      "sitesEnabledPath": "/etc/nginx/sites-enabled/your-app-dev",
+      "serverName": "dev.yoursite.com",
+      "port": 3000,
+      "sslEnabled": true,
+      "sslCertPath": "/etc/letsencrypt/live/yoursite.com/fullchain.pem",
+      "sslKeyPath": "/etc/letsencrypt/live/yoursite.com/privkey.pem"
+    },
+    "prod": {
+      "siteName": "your-app-prod",
+      "configPath": "/etc/nginx/sites-available/your-app-prod",
+      "sitesEnabledPath": "/etc/nginx/sites-enabled/your-app-prod",
+      "serverName": "yoursite.com",
+      "port": 3001,
+      "sslEnabled": true,
+      "sslCertPath": "/etc/letsencrypt/live/yoursite.com/fullchain.pem",
+      "sslKeyPath": "/etc/letsencrypt/live/yoursite.com/privkey.pem"
+    }
+  },
+  "server": {
+    "hostname": "yoursite.com",
+    "os": "",
+    "nodeVersion": "",
+    "npmVersion": "",
+    "pythonVersion": "",
+    "lastPackageUpdate": "",
+    "autoUpdates": false
+  }
+}

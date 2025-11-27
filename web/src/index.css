@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-slate-700;
+  }
+  body {
+    @apply bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100 font-sans antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-white/10 backdrop-blur-md border border-white/20;
+  }
+  
+  .glass-strong {
+    @apply bg-white/20 backdrop-blur-lg border border-white/30;
+  }
+  
+  .glass-subtle {
+    @apply bg-white/5 backdrop-blur-sm border border-white/10;
+  }
+  
+  /* Ensure buttons are always clickable */
+  button {
+    @apply pointer-events-auto;
+  }
+  
+  /* Fix any potential overlay issues */
+  .glass button,
+  .glass-strong button,
+  .glass-subtle button {
+    @apply relative z-10 pointer-events-auto;
+  }
+}
+
