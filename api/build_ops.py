@@ -1,11 +1,18 @@
-"""Build operations and status tracking"""
+"""Build operations and status tracking
+
+Integrates with build-production-unified.mjs for Next.js builds.
+Parses log output with prefixes: [BUILD], [STEP N], [OK], [INFO], [WARN], [ERROR]
+"""
 import subprocess
 import uuid
 import json
 import os
+import re
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pathlib import Path
+from enum import Enum
+from dataclasses import dataclass
 import asyncio
 from config import settings
 from models import BuildConfig, BuildStatus, BuildStatusResponse
@@ -16,6 +23,164 @@ from system_metrics import clear_workers
 # In-memory build storage (in production, use SQLite)
 _build_storage: Dict[str, Dict] = {}
 _running_processes: Dict[str, asyncio.subprocess.Process] = {}
+
+# Build step weights for progress calculation
+BUILD_STEPS = {
+    0: {'name': 'Kill zombies', 'weight': 2},
+    1: {'name': 'Stop PM2', 'weight': 5},
+    2: {'name': 'Stop Redis', 'weight': 2},
+    3: {'name': 'Check memory', 'weight': 1},
+    4: {'name': 'Install deps', 'weight': 10},
+    5: {'name': 'Build app', 'weight': 60},
+    6: {'name': 'Verify build', 'weight': 3},
+    7: {'name': 'Start Redis', 'weight': 2},
+    8: {'name': 'Restart PM2', 'weight': 12},
+    9: {'name': 'Switch Nginx', 'weight': 3},
+}
+
+
+class LogLevel(Enum):
+    BUILD = "build"
+    STEP = "step"
+    OK = "ok"
+    INFO = "info"
+    WARN = "warn"
+    ERROR = "error"
+
+
+@dataclass
+class BuildLogEntry:
+    level: LogLevel
+    message: str
+    step: Optional[int] = None
+    timestamp: datetime = None
+
+
+def parse_log_line(line: str) -> Optional[BuildLogEntry]:
+    """Parse a single log line from build output"""
+    # Remove ANSI codes if any slip through
+    line = re.sub(r'\x1b\[[0-9;]*m', '', line)
+    line = line.strip()
+    
+    if not line:
+        return None
+    
+    timestamp = datetime.utcnow()
+    
+    if line.startswith('[BUILD]'):
+        return BuildLogEntry(level=LogLevel.BUILD, message=line[7:].strip(), timestamp=timestamp)
+    
+    if line.startswith('[STEP'):
+        match = re.match(r'\[STEP (\d+)\] (.+)', line)
+        if match:
+            return BuildLogEntry(
+                level=LogLevel.STEP,
+                message=match.group(2),
+                step=int(match.group(1)),
+                timestamp=timestamp
+            )
+    
+    if line.startswith('[OK]'):
+        return BuildLogEntry(level=LogLevel.OK, message=line[4:].strip(), timestamp=timestamp)
+    
+    if line.startswith('[INFO]'):
+        return BuildLogEntry(level=LogLevel.INFO, message=line[6:].strip(), timestamp=timestamp)
+    
+    if line.startswith('[WARN]'):
+        return BuildLogEntry(level=LogLevel.WARN, message=line[6:].strip(), timestamp=timestamp)
+    
+    if line.startswith('[ERROR]'):
+        return BuildLogEntry(level=LogLevel.ERROR, message=line[7:].strip(), timestamp=timestamp)
+    
+    # Untagged line (Next.js output, etc.)
+    return BuildLogEntry(level=LogLevel.INFO, message=line, timestamp=timestamp)
+
+
+def calculate_progress(current_step: int, step_complete: bool = False) -> float:
+    """Calculate build progress percentage based on weighted steps"""
+    total_weight = sum(s['weight'] for s in BUILD_STEPS.values())
+    completed_weight = sum(
+        BUILD_STEPS[s]['weight'] 
+        for s in BUILD_STEPS 
+        if s < current_step or (s == current_step and step_complete)
+    )
+    return min(99.0, (completed_weight / total_weight) * 100)
+
+
+def is_build_successful(output: str, exit_code: int) -> bool:
+    """Check if build completed successfully"""
+    if exit_code != 0:
+        return False
+    
+    success_indicators = [
+        'Server build and restart completed!',
+        'BUILD COMPLETED SUCCESSFULLY',
+        'BUILD_COMPLETED created',
+        'Build completed successfully'
+    ]
+    
+    return any(indicator in output for indicator in success_indicators)
+
+
+def extract_errors(output: str) -> List[str]:
+    """Extract error messages from build output"""
+    errors = []
+    
+    for line in output.split('\n'):
+        line = line.strip()
+        
+        if line.startswith('[ERROR]'):
+            errors.append(line[7:].strip())
+        
+        # Next.js specific errors
+        if 'Build error' in line or 'Failed to compile' in line:
+            errors.append(line)
+        
+        # Memory errors
+        if 'FATAL ERROR' in line or 'heap out of memory' in line.lower():
+            errors.append(line)
+    
+    return errors
+
+
+def extract_timings(output: str) -> Dict[str, float]:
+    """Extract timing breakdown from build output"""
+    timings = {}
+    
+    if 'Timing breakdown:' in output:
+        lines = output.split('\n')
+        in_timing_section = False
+        
+        for line in lines:
+            if 'Timing breakdown:' in line:
+                in_timing_section = True
+                continue
+            
+            if in_timing_section:
+                # Parse lines like "[INFO]   Kill zombies: 3.21s"
+                match = re.match(r'.*?(\w[\w\s]+):\s*([\d.]+)s', line)
+                if match:
+                    step_name = match.group(1).strip()
+                    duration = float(match.group(2))
+                    timings[step_name] = duration
+                elif line.strip() and not line.strip().startswith('[INFO]'):
+                    break
+    
+    # Extract total time
+    total_match = re.search(r'Total time:\s*([\d.]+)s', output)
+    if total_match:
+        timings['total'] = float(total_match.group(1))
+    
+    return timings
+
+
+def get_current_step_from_log(log_content: str) -> tuple[int, str]:
+    """Extract current step number and name from log content"""
+    step_matches = re.findall(r'\[STEP (\d+)\] (.+)', log_content)
+    if step_matches:
+        last_step = step_matches[-1]
+        return int(last_step[0]), last_step[1]
+    return 0, "Initializing"
 
 
 def get_build_log_path(build_id: str) -> Path:
@@ -149,7 +314,17 @@ async def start_build(config: BuildConfig) -> BuildStatusResponse:
 
 
 async def run_build(build_id: str, config: BuildConfig, workers: int):
-    """Run the actual build process"""
+    """
+    Run the build process using pnpm run build:server
+    
+    Integrates with build-production-unified.mjs which outputs:
+    - [BUILD] General messages
+    - [STEP N] Step progress
+    - [OK] Success messages
+    - [INFO] Informational
+    - [WARN] Warnings
+    - [ERROR] Errors
+    """
     log_path = get_build_log_path(build_id)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     
@@ -157,48 +332,56 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
     status_data = load_build_status(build_id)
     if status_data:
         status_data["status"] = BuildStatus.RUNNING.value
-        status_data["message"] = "Build in progress..."
+        status_data["message"] = "Build starting..."
         status_data["current_step"] = "INIT"
         status_data["progress"] = 0
         save_build_status(build_id, status_data)
     
     try:
-        # Build command - use our minimal build script
         working_dir = settings.DEV_DIR
-        build_script = "/var/www/build/scripts/build-dev-minimal.sh"
         
-        # Set environment variables for the build script
+        # Build environment variables for build-production-unified.mjs
         env = os.environ.copy()
         env["BUILD_ID"] = build_id
-        env["BUILD_MODE"] = config.build_mode
-        env["WORKERS"] = str(workers)
-        env["MAX_OLD_SPACE"] = str(config.max_old_space_size or 8192)
-        env["MAX_SEMI_SPACE"] = str(config.max_semi_space_size or 0)
+        
+        # Build mode: quick, full, auto
+        build_mode = config.build_mode if hasattr(config, 'build_mode') else "full"
+        env["BUILD_MODE"] = build_mode
+        
+        # Skip dependencies installation
         env["SKIP_DEPS"] = "true" if config.skip_deps else "false"
-        env["FORCE_CLEAN"] = "true" if config.force_clean else "false"
-        env["TEST_DATABASE"] = "true" if config.test_database else "false"
-        env["TEST_REDIS"] = "true" if config.test_redis else "false"
-        env["DEV_DIR"] = working_dir
-        env["LOG_FILE"] = str(log_path)
         
-        # Advanced options
-        env["USE_REDIS_CACHE"] = "true" if config.use_redis_cache else "false"
-        env["INCREMENTAL_BUILD"] = "true" if config.incremental_build else "false"
-        env["SKIP_TYPE_CHECK"] = "true" if config.skip_type_check else "false"
-        env["PARALLEL_PROCESSING"] = "true" if config.parallel_processing else "false"
-        env["MINIFY_OUTPUT"] = "true" if config.minify_output else "false"
-        env["SOURCE_MAPS"] = "true" if config.source_maps else "false"
-        env["TREE_SHAKING"] = "true" if config.tree_shaking else "false"
-        env["CODE_SPLITTING"] = "true" if config.code_splitting else "false"
-        env["COMPRESS_ASSETS"] = "true" if config.compress_assets else "false"
-        env["OPTIMIZE_IMAGES"] = "true" if config.optimize_images else "false"
-        env["REMOVE_CONSOLE_LOGS"] = "true" if config.remove_console_logs else "false"
-        env["EXPERIMENTAL_TURBO"] = "true" if config.experimental_turbo else "false"
+        # Clear .next cache before build
+        env["CLEAR_CACHE"] = "true" if config.force_clean else "false"
         
-        # Run build script in background
-        with open(log_path, "w") as log_file:
+        # Quick build (skip static generation)
+        env["QUICK_BUILD"] = "true" if build_mode == "quick" else "false"
+        
+        # Force full rebuild
+        env["FORCE_FULL_BUILD"] = "true" if build_mode == "full" else "false"
+        
+        # Memory settings (auto-detected by script, but can override)
+        if config.max_old_space_size and config.max_old_space_size > 0:
+            env["MAX_OLD_SPACE"] = str(config.max_old_space_size)
+        
+        # Workers (auto-detected by script)
+        if workers and workers > 0:
+            env["BUILD_WORKERS"] = str(workers)
+        
+        # Run pnpm run build:server
+        with open(log_path, "w", encoding='utf-8', errors='replace') as log_file:
+            # Write initial header
+            log_file.write(f"[BUILD] BuildMaster Build Started\n")
+            log_file.write(f"[INFO] Build ID: {build_id}\n")
+            log_file.write(f"[INFO] Mode: {build_mode}\n")
+            log_file.write(f"[INFO] Working Directory: {working_dir}\n")
+            log_file.write(f"[INFO] Skip Deps: {env['SKIP_DEPS']}\n")
+            log_file.write(f"[INFO] Clear Cache: {env['CLEAR_CACHE']}\n")
+            log_file.write(f"[BUILD] ================================\n\n")
+            log_file.flush()
+            
             process = await asyncio.create_subprocess_exec(
-                "bash", build_script,
+                "pnpm", "run", "build:server",
                 cwd=working_dir,
                 env=env,
                 stdout=log_file,
@@ -211,70 +394,70 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
             # Monitor process with heartbeat
             last_output_time = datetime.utcnow()
             last_output_size = 0
+            last_step = 0
             
             while True:
-                await asyncio.sleep(5)  # Heartbeat every 5 seconds
+                await asyncio.sleep(5)  # Check every 5 seconds
                 
                 # Check if process is done
                 if process.returncode is not None:
-                    # Clean up process tracking
                     _running_processes.pop(build_id, None)
                     break
                 
-                # Read status file created by build script
-                status_file = Path(f"/var/www/build/status/{build_id}.json")
-                if status_file.exists():
+                # Parse log for progress updates
+                if log_path.exists():
                     try:
-                        with open(status_file, "r") as f:
-                            script_status = json.load(f)
+                        current_size = log_path.stat().st_size
                         
-                        # Update our status with script's progress
-                        status_data = load_build_status(build_id)
-                        if status_data:
-                            status_data["current_step"] = script_status.get("current_step", "RUNNING")
-                            status_data["progress"] = script_status.get("progress", 0)
-                            status_data["message"] = script_status.get("message", "Build in progress...")
-                            save_build_status(build_id, status_data)
+                        with open(log_path, "r", encoding='utf-8', errors='replace') as f:
+                            content = f.read()
+                        
+                        # Get current step from log
+                        current_step, step_name = get_current_step_from_log(content)
+                        
+                        if current_step != last_step:
+                            last_step = current_step
+                            progress = calculate_progress(current_step)
+                            
+                            status_data = load_build_status(build_id)
+                            if status_data:
+                                status_data["current_step"] = f"STEP_{current_step}"
+                                status_data["progress"] = round(progress, 1)
+                                status_data["message"] = step_name
+                                save_build_status(build_id, status_data)
+                        
+                        # Check for stalled build
+                        if current_size != last_output_size:
+                            last_output_size = current_size
+                            last_output_time = datetime.utcnow()
+                        elif (datetime.utcnow() - last_output_time).total_seconds() > 600:
+                            # Build stalled - no output for 10 minutes
+                            status_data = load_build_status(build_id)
+                            if status_data:
+                                status_data["status"] = BuildStatus.STALLED.value
+                                status_data["message"] = "Build stalled - no output for 10 minutes"
+                                save_build_status(build_id, status_data)
+                            
+                            try:
+                                await send_build_stalled_email(build_id, content[-2000:])
+                            except:
+                                pass
+                            
+                            process.kill()
+                            break
+                            
                     except Exception as e:
-                        print(f"Failed to read script status: {e}")
-                
-                # Check for stalled build (no output for 10 minutes)
-                current_size = log_path.stat().st_size if log_path.exists() else 0
-                if current_size != last_output_size:
-                    last_output_size = current_size
-                    last_output_time = datetime.utcnow()
-                elif (datetime.utcnow() - last_output_time).total_seconds() > 600:
-                    # Build stalled - no output for 10 minutes
-                    status_data = load_build_status(build_id)
-                    if status_data:
-                        status_data["status"] = BuildStatus.ERROR.value
-                        status_data["message"] = "Build stalled - no output for 10 minutes"
-                        save_build_status(build_id, status_data)
-                    
-                    # Send stalled notification
-                    try:
-                        last_output = ""
-                        if log_path.exists():
-                            with open(log_path, "r") as f:
-                                last_output = f.read()[-1000:]
-                        await send_build_stalled_email(build_id, last_output)
-                    except Exception as e:
-                        print(f"Failed to send stalled email: {e}")
-                    
-                    # Kill process
-                    process.kill()
-                    break
+                        print(f"Error parsing log: {e}")
             
-            # Wait for process to complete
             await process.wait()
         
-        # Read log file
+        # Read final log content
         log_content = ""
         if log_path.exists():
-            with open(log_path, "r") as f:
+            with open(log_path, "r", encoding='utf-8', errors='replace') as f:
                 log_content = f.read()
         
-        # Update status based on return code
+        # Determine result
         completed_at = datetime.utcnow()
         status_data = load_build_status(build_id)
         
@@ -292,17 +475,30 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
             except:
                 pass
         
-        if process.returncode == 0:
+        # Check success using both exit code AND success message
+        if process.returncode == 0 and is_build_successful(log_content, process.returncode):
             status_data["status"] = BuildStatus.SUCCESS.value
             status_data["message"] = "Build completed successfully"
             status_data["progress"] = 100.0
             status_data["current_step"] = "COMPLETE"
+            
+            # Extract and store timing info
+            timings = extract_timings(log_content)
+            if timings:
+                status_data["timings"] = timings
         else:
             status_data["status"] = BuildStatus.ERROR.value
-            status_data["message"] = f"Build failed with exit code {process.returncode}"
-            status_data["error"] = log_content[-2000:] if log_content else "Unknown error"
             
-            # Determine error type from log
+            # Extract specific errors
+            errors = extract_errors(log_content)
+            if errors:
+                status_data["message"] = f"Build failed: {errors[0]}"
+                status_data["error"] = '\n'.join(errors[:10])
+            else:
+                status_data["message"] = f"Build failed with exit code {process.returncode}"
+                status_data["error"] = log_content[-3000:] if log_content else "Unknown error"
+            
+            # Determine error type
             error_lower = log_content.lower()
             if "out of memory" in error_lower or "heap out of memory" in error_lower:
                 status_data["error_type"] = "OUT_OF_MEMORY"
@@ -326,7 +522,7 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
         try:
             await send_build_completed_email(
                 build_id,
-                process.returncode == 0,
+                status_data["status"] == BuildStatus.SUCCESS.value,
                 status_data["message"],
                 status_data.get("error")
             )
@@ -344,7 +540,6 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
             status_data["completed_at"] = completed_at.isoformat()
             save_build_status(build_id, status_data)
         
-        # Send error email
         try:
             await send_build_completed_email(build_id, False, f"Build error: {str(e)}", str(e))
         except:
