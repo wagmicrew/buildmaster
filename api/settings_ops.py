@@ -609,3 +609,132 @@ async def read_env_database_settings(dev_path: str, prod_path: str) -> Dict[str,
             "hasConfig": bool(prod_config.get("database"))
         }
     }
+
+
+async def scan_all_env_databases(project_path: str) -> Dict[str, Any]:
+    """Scan ALL .env* files in a project directory for DATABASE_URL strings"""
+    import glob
+    
+    databases = []
+    seen_urls = set()  # Track unique URLs
+    
+    # Find all .env* files
+    env_pattern = os.path.join(project_path, ".env*")
+    env_files = glob.glob(env_pattern)
+    
+    # Also check subdirectories one level deep
+    subdir_pattern = os.path.join(project_path, "*/.env*")
+    env_files.extend(glob.glob(subdir_pattern))
+    
+    for env_path in sorted(env_files):
+        # Skip backup directories
+        if '-backups' in env_path or '.backup' in env_path:
+            continue
+            
+        try:
+            with open(env_path, 'r') as f:
+                content = f.read()
+            
+            # Get relative path for display
+            rel_path = os.path.basename(env_path)
+            
+            # Look for DATABASE_URL
+            for line in content.split('\n'):
+                line = line.strip()
+                if line.startswith('#'):
+                    continue
+                if line.startswith('DATABASE_URL=') or line.startswith('DATABASE_URL ='):
+                    url = line.split('=', 1)[1].strip().strip('"').strip("'")
+                    
+                    # Skip empty URLs
+                    if not url:
+                        continue
+                    
+                    # Parse the URL to get display info
+                    db_info = parse_database_url(url)
+                    
+                    # Create unique key to avoid duplicates
+                    unique_key = f"{db_info['database']}@{db_info['host']}:{db_info['port']}"
+                    
+                    if unique_key not in seen_urls:
+                        seen_urls.add(unique_key)
+                        databases.append({
+                            "url": url,
+                            "database": db_info["database"],
+                            "user": db_info["user"],
+                            "host": db_info["host"],
+                            "port": db_info["port"],
+                            "sslMode": db_info["sslMode"],
+                            "source": rel_path,
+                            "display": f"{db_info['database']} ({db_info['user']}@{db_info['host']}:{db_info['port']}) - from {rel_path}"
+                        })
+                    else:
+                        # Add source to existing entry
+                        for db in databases:
+                            if f"{db['database']}@{db['host']}:{db['port']}" == unique_key:
+                                if rel_path not in db['source']:
+                                    db['source'] += f", {rel_path}"
+                                    db['display'] = f"{db['database']} ({db['user']}@{db['host']}:{db['port']}) - from {db['source']}"
+                                break
+                        
+        except Exception as e:
+            print(f"Error reading {env_path}: {e}")
+            continue
+    
+    return {
+        "success": True,
+        "databases": databases,
+        "count": len(databases),
+        "scanned_path": project_path
+    }
+
+
+def parse_database_url(url: str) -> Dict[str, Any]:
+    """Parse a PostgreSQL connection URL into components"""
+    result = {
+        "database": "",
+        "host": "localhost",
+        "port": 5432,
+        "user": "",
+        "password": "",
+        "sslMode": "prefer"
+    }
+    
+    if not url:
+        return result
+    
+    if url.startswith('postgres://') or url.startswith('postgresql://'):
+        url = url.replace('postgres://', '').replace('postgresql://', '')
+        
+        # Extract sslmode from query string
+        if '?' in url:
+            url_part, query = url.split('?', 1)
+            for param in query.split('&'):
+                if param.startswith('sslmode='):
+                    result["sslMode"] = param.split('=')[1]
+        else:
+            url_part = url
+        
+        # Parse user:pass@host:port/database
+        if '@' in url_part:
+            auth, hostdb = url_part.split('@', 1)
+            if ':' in auth:
+                result["user"], result["password"] = auth.split(':', 1)
+            else:
+                result["user"] = auth
+            
+            if '/' in hostdb:
+                hostport, result["database"] = hostdb.split('/', 1)
+                # Remove any query params from database name
+                if '?' in result["database"]:
+                    result["database"] = result["database"].split('?')[0]
+                if ':' in hostport:
+                    result["host"], port_str = hostport.split(':', 1)
+                    try:
+                        result["port"] = int(port_str)
+                    except:
+                        result["port"] = 5432
+                else:
+                    result["host"] = hostport
+    
+    return result

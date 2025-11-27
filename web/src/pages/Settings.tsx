@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../services/api'
 import {
   Settings as SettingsIcon,
+  Settings2,
   Server,
   Database,
   Play,
@@ -302,6 +303,30 @@ export default function Settings() {
     retry: false
   })
 
+  // Scan all .env files for databases - Dev
+  const { data: allDevDatabases, refetch: refetchAllDevDatabases } = useQuery({
+    queryKey: ['all-dev-databases'],
+    queryFn: async () => {
+      const response = await api.get('/settings/database/scan-all', { params: { env: 'dev' } })
+      return response.data
+    }
+  })
+
+  // Scan all .env files for databases - Prod
+  const { data: allProdDatabases, refetch: refetchAllProdDatabases } = useQuery({
+    queryKey: ['all-prod-databases'],
+    queryFn: async () => {
+      const response = await api.get('/settings/database/scan-all', { params: { env: 'prod' } })
+      return response.data
+    }
+  })
+
+  // State for selected database URLs
+  const [selectedDevDbUrl, setSelectedDevDbUrl] = useState<string>('')
+  const [selectedProdDbUrl, setSelectedProdDbUrl] = useState<string>('')
+  const [customDevDbUrl, setCustomDevDbUrl] = useState<string>('')
+  const [customProdDbUrl, setCustomProdDbUrl] = useState<string>('')
+
   // Apply env database config to settings
   const applyEnvDatabaseConfig = () => {
     if (envDatabaseConfig) {
@@ -315,6 +340,66 @@ export default function Settings() {
         }
       }))
     }
+  }
+
+  // Apply selected database URL
+  const applySelectedDatabase = (env: 'dev' | 'prod', url: string) => {
+    if (!url) return
+    
+    // Parse the URL to extract components
+    const parsed = parseDbUrl(url)
+    
+    setSettings(prev => ({
+      ...prev,
+      database: {
+        ...prev.database,
+        ...(env === 'dev' ? {
+          devDatabase: parsed.database,
+          host: parsed.host,
+          port: parsed.port,
+          masterUser: parsed.user,
+          sslMode: parsed.sslMode,
+          useLocalhost: parsed.host === 'localhost' || parsed.host === '127.0.0.1'
+        } : {
+          prodDatabase: parsed.database
+        })
+      }
+    }))
+  }
+
+  // Helper to parse database URL
+  const parseDbUrl = (url: string) => {
+    const result = { database: '', host: 'localhost', port: 5432, user: '', sslMode: 'prefer' }
+    if (!url) return result
+    
+    let cleanUrl = url.replace('postgres://', '').replace('postgresql://', '')
+    
+    if (cleanUrl.includes('?')) {
+      const [urlPart, query] = cleanUrl.split('?')
+      cleanUrl = urlPart
+      query.split('&').forEach(param => {
+        if (param.startsWith('sslmode=')) result.sslMode = param.split('=')[1]
+      })
+    }
+    
+    if (cleanUrl.includes('@')) {
+      const [auth, hostdb] = cleanUrl.split('@')
+      result.user = auth.includes(':') ? auth.split(':')[0] : auth
+      
+      if (hostdb.includes('/')) {
+        const [hostport, db] = hostdb.split('/')
+        result.database = db.split('?')[0]
+        if (hostport.includes(':')) {
+          const [h, p] = hostport.split(':')
+          result.host = h
+          result.port = parseInt(p) || 5432
+        } else {
+          result.host = hostport
+        }
+      }
+    }
+    
+    return result
   }
 
   // Save settings mutation
@@ -630,59 +715,171 @@ export default function Settings() {
 
   const renderDatabaseSettings = () => (
     <div className="space-y-6">
-      {/* Detected from .env files */}
-      {envDatabaseConfig && (envDatabaseConfig.dev?.hasConfig || envDatabaseConfig.prod?.hasConfig) && (
-        <div className="glass rounded-xl p-6 border border-green-500/30">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xl font-semibold text-white flex items-center gap-2">
-              <CheckCircle className="text-green-400" size={20} />
-              Detected from .env Files
-            </h3>
-            <div className="flex items-center gap-2">
+      {/* Development Database Selection */}
+      <div className="glass rounded-xl p-6 border border-sky-500/30">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-semibold text-white flex items-center gap-2">
+            <Database className="text-sky-400" size={20} />
+            Development Database
+          </h3>
+          <button
+            onClick={() => { refetchAllDevDatabases(); refetchEnvDb() }}
+            className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm transition-colors flex items-center gap-2"
+          >
+            <RefreshCw size={14} />
+            Scan .env Files
+          </button>
+        </div>
+        
+        <div className="space-y-4">
+          {/* Select from available databases */}
+          <div>
+            <label className="block text-sm text-slate-400 mb-2">Select from Available Databases</label>
+            <select
+              value={selectedDevDbUrl}
+              onChange={(e) => {
+                setSelectedDevDbUrl(e.target.value)
+                if (e.target.value) {
+                  applySelectedDatabase('dev', e.target.value)
+                }
+              }}
+              className="w-full bg-black/50 text-white p-3 rounded-lg border border-white/10 focus:border-sky-500/50 focus:outline-none"
+            >
+              <option value="">-- Select a database --</option>
+              {allDevDatabases?.databases?.map((db: any, idx: number) => (
+                <option key={idx} value={db.url}>
+                  {db.display}
+                </option>
+              ))}
+            </select>
+            {allDevDatabases?.count === 0 && (
+              <p className="text-xs text-slate-500 mt-1">No DATABASE_URL found in .env files</p>
+            )}
+          </div>
+
+          {/* Currently selected display */}
+          {settings.database.devDatabase && (
+            <div className="p-3 bg-sky-500/10 rounded-lg border border-sky-500/20">
+              <div className="text-xs text-sky-400 mb-1">Currently Selected:</div>
+              <div className="text-white font-mono text-sm break-all">
+                postgresql://{settings.database.masterUser}@{settings.database.useLocalhost ? 'localhost' : settings.database.host}:{settings.database.port}/{settings.database.devDatabase}
+              </div>
+            </div>
+          )}
+
+          {/* Custom URL input */}
+          <div>
+            <label className="block text-sm text-slate-400 mb-2">Or Enter Custom Database URL</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={customDevDbUrl}
+                onChange={(e) => setCustomDevDbUrl(e.target.value)}
+                className="flex-1 bg-black/50 text-white p-3 rounded-lg border border-white/10 focus:border-sky-500/50 focus:outline-none font-mono text-sm"
+                placeholder="postgresql://user:pass@host:5432/database"
+              />
               <button
-                onClick={() => refetchEnvDb()}
-                className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm transition-colors flex items-center gap-2"
+                onClick={() => {
+                  if (customDevDbUrl) {
+                    applySelectedDatabase('dev', customDevDbUrl)
+                    setSelectedDevDbUrl('')
+                  }
+                }}
+                disabled={!customDevDbUrl}
+                className="px-4 py-2 bg-sky-500 hover:bg-sky-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm transition-colors"
               >
-                <RefreshCw size={14} />
-                Refresh
-              </button>
-              <button
-                onClick={applyEnvDatabaseConfig}
-                className="px-4 py-2 bg-green-500/20 text-green-400 rounded-lg text-sm hover:bg-green-500/30 transition-colors flex items-center gap-2"
-              >
-                <CheckCircle size={14} />
-                Apply to Settings
+                Apply
               </button>
             </div>
           </div>
-          
-          <div className="grid grid-cols-2 gap-4">
-            {envDatabaseConfig.dev?.hasConfig && (
-              <div className="p-3 bg-black/30 rounded-lg">
-                <div className="text-xs text-slate-400 mb-1">Development (from {envDatabaseConfig.dev.source})</div>
-                <div className="text-white font-mono text-sm">{envDatabaseConfig.dev.database}</div>
-                <div className="text-xs text-slate-500 mt-1">
-                  Host: {envDatabaseConfig.dev.host}:{envDatabaseConfig.dev.port} | SSL: {envDatabaseConfig.dev.sslMode}
-                </div>
-              </div>
-            )}
-            {envDatabaseConfig.prod?.hasConfig && (
-              <div className="p-3 bg-black/30 rounded-lg">
-                <div className="text-xs text-slate-400 mb-1">Production (from {envDatabaseConfig.prod.source})</div>
-                <div className="text-white font-mono text-sm">{envDatabaseConfig.prod.database}</div>
-                <div className="text-xs text-slate-500 mt-1">
-                  Host: {envDatabaseConfig.prod.host}:{envDatabaseConfig.prod.port} | SSL: {envDatabaseConfig.prod.sslMode}
-                </div>
-              </div>
+        </div>
+      </div>
+
+      {/* Production Database Selection */}
+      <div className="glass rounded-xl p-6 border border-emerald-500/30">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-semibold text-white flex items-center gap-2">
+            <Database className="text-emerald-400" size={20} />
+            Production Database
+          </h3>
+          <button
+            onClick={() => refetchAllProdDatabases()}
+            className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm transition-colors flex items-center gap-2"
+          >
+            <RefreshCw size={14} />
+            Scan .env Files
+          </button>
+        </div>
+        
+        <div className="space-y-4">
+          {/* Select from available databases */}
+          <div>
+            <label className="block text-sm text-slate-400 mb-2">Select from Available Databases</label>
+            <select
+              value={selectedProdDbUrl}
+              onChange={(e) => {
+                setSelectedProdDbUrl(e.target.value)
+                if (e.target.value) {
+                  applySelectedDatabase('prod', e.target.value)
+                }
+              }}
+              className="w-full bg-black/50 text-white p-3 rounded-lg border border-white/10 focus:border-emerald-500/50 focus:outline-none"
+            >
+              <option value="">-- Select a database --</option>
+              {allProdDatabases?.databases?.map((db: any, idx: number) => (
+                <option key={idx} value={db.url}>
+                  {db.display}
+                </option>
+              ))}
+            </select>
+            {allProdDatabases?.count === 0 && (
+              <p className="text-xs text-slate-500 mt-1">No DATABASE_URL found in .env files</p>
             )}
           </div>
-        </div>
-      )}
 
+          {/* Currently selected display */}
+          {settings.database.prodDatabase && (
+            <div className="p-3 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
+              <div className="text-xs text-emerald-400 mb-1">Currently Selected:</div>
+              <div className="text-white font-mono text-sm break-all">
+                postgresql://{settings.database.masterUser}@{settings.database.useLocalhost ? 'localhost' : settings.database.host}:{settings.database.port}/{settings.database.prodDatabase}
+              </div>
+            </div>
+          )}
+
+          {/* Custom URL input */}
+          <div>
+            <label className="block text-sm text-slate-400 mb-2">Or Enter Custom Database URL</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={customProdDbUrl}
+                onChange={(e) => setCustomProdDbUrl(e.target.value)}
+                className="flex-1 bg-black/50 text-white p-3 rounded-lg border border-white/10 focus:border-emerald-500/50 focus:outline-none font-mono text-sm"
+                placeholder="postgresql://user:pass@host:5432/database"
+              />
+              <button
+                onClick={() => {
+                  if (customProdDbUrl) {
+                    applySelectedDatabase('prod', customProdDbUrl)
+                    setSelectedProdDbUrl('')
+                  }
+                }}
+                disabled={!customProdDbUrl}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm transition-colors"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Advanced Connection Settings */}
       <div className="glass rounded-xl p-6">
         <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
-          <Database className="text-green-400" size={20} />
-          PostgreSQL Connection
+          <Settings2 className="text-slate-400" size={20} />
+          Advanced Connection Settings
         </h3>
         
         <div className="space-y-4">
@@ -768,7 +965,6 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Database Selection */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm text-slate-400 mb-2">Dev Database Name</label>
@@ -779,7 +975,6 @@ export default function Settings() {
                   ...prev,
                   database: { ...prev.database, devDatabase: e.target.value }
                 }))}
-                list="available-databases-list"
                 className="w-full bg-black/50 text-white p-3 rounded-lg border border-white/10 focus:border-green-500/50 focus:outline-none"
                 placeholder="myapp_dev"
               />
@@ -793,21 +988,11 @@ export default function Settings() {
                   ...prev,
                   database: { ...prev.database, prodDatabase: e.target.value }
                 }))}
-                list="available-databases-list"
                 className="w-full bg-black/50 text-white p-3 rounded-lg border border-white/10 focus:border-green-500/50 focus:outline-none"
                 placeholder="myapp_prod"
               />
             </div>
           </div>
-
-          {/* Datalist for autocomplete (hidden, populated when databases loaded) */}
-          {availableDatabases?.databases?.length > 0 && (
-            <datalist id="available-databases-list">
-              {availableDatabases.databases.map((db: string) => (
-                <option key={db} value={db} />
-              ))}
-            </datalist>
-          )}
 
           {/* Quick actions for database detection */}
           <div className="p-3 bg-black/20 rounded-lg border border-white/5">

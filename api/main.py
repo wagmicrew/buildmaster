@@ -89,7 +89,8 @@ from settings_ops import (
     reload_nginx,
     test_database_connection,
     read_env_database_settings,
-    list_available_databases
+    list_available_databases,
+    scan_all_env_databases
 )
 from buildmaster_ops import (
     load_buildmaster_settings,
@@ -2204,6 +2205,23 @@ async def available_databases_endpoint(
     """List available PostgreSQL databases"""
     try:
         result = await list_available_databases(host, port, user, password)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/settings/database/scan-all", response_model=dict)
+async def scan_all_databases_endpoint(
+    env: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """Scan ALL .env* files for DATABASE_URL strings"""
+    try:
+        project_path = settings.DEV_DIR if env == "dev" else settings.PROD_DIR
+        result = await scan_all_env_databases(project_path)
         return result
     except Exception as e:
         raise HTTPException(
