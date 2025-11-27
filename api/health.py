@@ -19,9 +19,13 @@ from pm2_ops import is_pm2_running
 SETTINGS_FILE = "/var/www/build/settings.json"
 
 
-def get_database_url_from_env(project_path: str) -> Optional[str]:
+def get_database_url_from_env(project_path: str, env: str = "dev") -> Optional[str]:
     """Read DATABASE_URL from .env files in the project"""
-    env_files = [".env.local", ".env.production.local", ".env.development.local", ".env"]
+    # Order of preference for env files
+    if env == "prod":
+        env_files = [".env.local", ".env.production.local", ".env.production", ".env"]
+    else:
+        env_files = [".env.local", ".env.development.local", ".env.development", ".env"]
     
     for env_file in env_files:
         env_path = os.path.join(project_path, env_file)
@@ -30,10 +34,22 @@ def get_database_url_from_env(project_path: str) -> Optional[str]:
                 with open(env_path, 'r') as f:
                     for line in f:
                         line = line.strip()
+                        # Skip comments and empty lines
+                        if not line or line.startswith('#'):
+                            continue
                         if line.startswith('DATABASE_URL=') or line.startswith('DATABASE_URL ='):
-                            url = line.split('=', 1)[1].strip().strip('"').strip("'")
+                            # Handle various quote styles and potential inline comments
+                            url = line.split('=', 1)[1].strip()
+                            # Remove surrounding quotes
+                            if (url.startswith('"') and url.endswith('"')) or \
+                               (url.startswith("'") and url.endswith("'")):
+                                url = url[1:-1]
+                            # Remove inline comments
+                            if ' #' in url:
+                                url = url.split(' #')[0].strip()
                             return url
-            except:
+            except Exception as e:
+                print(f"Error reading {env_path}: {e}")
                 continue
     return None
 
@@ -62,7 +78,7 @@ async def check_database_health_for_env(env: str = "dev") -> Dict[str, Any]:
         project_path = settings.DEV_DIR if env == "dev" else settings.PROD_DIR
         
         # First try to get from .env files in the project
-        database_url = get_database_url_from_env(project_path)
+        database_url = get_database_url_from_env(project_path, env)
         
         if not database_url:
             # Fallback to building URL from settings.json
@@ -95,15 +111,27 @@ async def check_database_health_for_env(env: str = "dev") -> Dict[str, Any]:
         
         response_time = (time.time() - start_time) * 1000
         
+        # Extract database name from URL for display
+        db_name = "unknown"
+        try:
+            if "/" in database_url:
+                db_name = database_url.split("/")[-1].split("?")[0]
+        except:
+            pass
+        
         return {
             "status": "connected",
-            "response_time": f"{response_time:.1f}ms"
+            "response_time": f"{response_time:.1f}ms",
+            "database": db_name,
+            "env": env
         }
     except Exception as e:
         return {
             "status": "disconnected",
             "response_time": "N/A",
-            "error": str(e)
+            "error": str(e),
+            "env": env,
+            "path_checked": project_path
         }
 
 

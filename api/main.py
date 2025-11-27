@@ -482,15 +482,44 @@ async def health_server_endpoint(
     email: str = Depends(verify_session_token)
 ):
     """Get server health metrics including database status"""
+    import psutil
+    
     try:
         health = await get_server_health()
-        health_dict = health.dict()
+        
+        # Get CPU cores
+        cpu_cores = psutil.cpu_count(logical=True) or 0
+        
+        # Convert memory from bytes to MB
+        memory_total_mb = round(health.memory_total / (1024 * 1024))
+        memory_used_mb = round((health.memory_total - health.memory_available) / (1024 * 1024))
+        
+        # Build response in expected format for Dashboard
+        response = {
+            "uptime": health.uptime,
+            "timestamp": health.timestamp.isoformat(),
+            "cpu": {
+                "percent": health.cpu_percent,
+                "cores": cpu_cores
+            },
+            "memory": {
+                "total_mb": memory_total_mb,
+                "used_mb": memory_used_mb,
+                "available_mb": round(health.memory_available / (1024 * 1024)),
+                "percent": health.memory_percent
+            },
+            "disk": {
+                "total_gb": round(health.disk_total / (1024 * 1024 * 1024), 1),
+                "free_gb": round(health.disk_free / (1024 * 1024 * 1024), 1),
+                "percent": health.disk_percent
+            }
+        }
         
         # Add database health for the specified environment
         db_health = await check_database_health_for_env(env)
-        health_dict["database"] = db_health
+        response["database"] = db_health
         
-        return health_dict
+        return response
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
