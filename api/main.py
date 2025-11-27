@@ -91,6 +91,19 @@ from settings_ops import (
     read_env_database_settings,
     list_available_databases
 )
+from buildmaster_ops import (
+    load_buildmaster_settings,
+    save_buildmaster_settings,
+    load_valid_emails,
+    save_valid_emails,
+    add_valid_email,
+    remove_valid_email,
+    check_for_updates,
+    update_application,
+    restart_buildmaster_service,
+    get_buildmaster_status,
+    initialize_valid_emails
+)
 
 # Create FastAPI app
 app = FastAPI(
@@ -143,10 +156,12 @@ async def verify_session_token(
     return email
 
 
-# Cleanup expired sessions on startup
+# Cleanup expired sessions on startup and initialize valid emails
 @app.on_event("startup")
 async def startup_event():
     cleanup_expired_sessions()
+    # Initialize valid emails if not exists
+    await initialize_valid_emails()
 
 
 # Authentication endpoints
@@ -2236,6 +2251,173 @@ async def git_status_simple_endpoint(
             "has_changes": False,
             "error": str(e)
         }
+
+
+# ============= BUILDMASTER SETTINGS ENDPOINTS =============
+
+@app.get("/api/buildmaster/settings", response_model=dict)
+async def get_buildmaster_settings_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Get BuildMaster settings"""
+    try:
+        settings_data = await load_buildmaster_settings()
+        return settings_data
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/buildmaster/settings", response_model=dict)
+async def save_buildmaster_settings_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Save BuildMaster settings"""
+    try:
+        result = await save_buildmaster_settings(payload)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/buildmaster/status", response_model=dict)
+async def get_buildmaster_status_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Get BuildMaster status"""
+    try:
+        status_data = await get_buildmaster_status()
+        return status_data
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/buildmaster/valid-emails", response_model=dict)
+async def get_valid_emails_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Get list of valid emails (authorized users)"""
+    try:
+        emails = await load_valid_emails()
+        return {"success": True, "emails": emails, "count": len(emails)}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/buildmaster/valid-emails", response_model=dict)
+async def save_valid_emails_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Save list of valid emails"""
+    try:
+        emails = payload.get("emails", [])
+        result = await save_valid_emails(emails)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/buildmaster/valid-emails/add", response_model=dict)
+async def add_valid_email_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Add a single valid email"""
+    try:
+        new_email = payload.get("email", "")
+        if not new_email:
+            raise HTTPException(status_code=400, detail="Email is required")
+        result = await add_valid_email(new_email)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/buildmaster/valid-emails/remove", response_model=dict)
+async def remove_valid_email_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Remove a valid email"""
+    try:
+        email_to_remove = payload.get("email", "")
+        if not email_to_remove:
+            raise HTTPException(status_code=400, detail="Email is required")
+        result = await remove_valid_email(email_to_remove)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/buildmaster/check-updates", response_model=dict)
+async def check_updates_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Check for BuildMaster updates from GitHub"""
+    try:
+        result = await check_for_updates()
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/buildmaster/update", response_model=dict)
+async def update_buildmaster_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Update BuildMaster application from GitHub"""
+    try:
+        result = await update_application()
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/buildmaster/restart", response_model=dict)
+async def restart_buildmaster_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Restart BuildMaster service"""
+    try:
+        result = await restart_buildmaster_service()
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
 
 
 # Health check endpoint (no auth required)

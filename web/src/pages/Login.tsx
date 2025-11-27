@@ -1,6 +1,26 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { authService } from '../services/auth'
+import { Wrench, Cog, Hammer } from 'lucide-react'
+
+// BuildMaster Logo Component
+const BuildMasterLogo = () => (
+  <div className="relative w-24 h-24 mx-auto mb-4">
+    {/* Outer ring */}
+    <div className="absolute inset-0 rounded-full bg-gradient-to-br from-amber-500 via-orange-500 to-rose-500 animate-pulse" style={{ animationDuration: '3s' }} />
+    {/* Inner dark circle */}
+    <div className="absolute inset-1 rounded-full bg-slate-900 flex items-center justify-center">
+      {/* Icon stack */}
+      <div className="relative">
+        <Cog className="absolute -top-2 -left-2 text-amber-400 opacity-60" size={24} />
+        <Wrench className="text-amber-400" size={40} />
+        <Hammer className="absolute -bottom-1 -right-2 text-orange-400 opacity-80" size={20} />
+      </div>
+    </div>
+    {/* Glow effect */}
+    <div className="absolute inset-0 rounded-full bg-gradient-to-br from-amber-500/20 to-rose-500/20 blur-xl" />
+  </div>
+)
 
 export default function Login() {
   const [step, setStep] = useState<'email' | 'otp'>('email')
@@ -55,8 +75,11 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="glass rounded-2xl p-8 w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">Build Dashboard</h1>
-          <p className="text-slate-400">TrafikskolaX Deployment System</p>
+          <BuildMasterLogo />
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 bg-clip-text text-transparent mb-2">
+            BuildMaster
+          </h1>
+          <p className="text-slate-400">Deployment System</p>
         </div>
 
         {step === 'email' ? (

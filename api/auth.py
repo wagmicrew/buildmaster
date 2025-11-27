@@ -2,6 +2,7 @@
 import secrets
 import hashlib
 import hmac
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict
 from fastapi import HTTPException, status
@@ -45,12 +46,25 @@ async def request_otp(email: str) -> bool:
     Raises:
         HTTPException: If email is not allowed or rate limit exceeded
     """
-    # Validate email
-    if email.lower() != settings.ALLOWED_EMAIL.lower():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email not authorized"
-        )
+    # Import here to avoid circular imports
+    from buildmaster_ops import is_email_valid, load_valid_emails
+    
+    # Validate email against valid emails list
+    valid_emails = await load_valid_emails()
+    
+    # Fallback to config ALLOWED_EMAIL if no valid emails are configured
+    if not valid_emails:
+        if email.lower() != settings.ALLOWED_EMAIL.lower():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Email not authorized"
+            )
+    else:
+        if not await is_email_valid(email):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Email not authorized"
+            )
     
     # Rate limiting check
     email_key = email.lower()
@@ -120,12 +134,25 @@ async def verify_otp(email: str, otp_code: str) -> SessionResponse:
     Raises:
         HTTPException: If OTP is invalid or expired
     """
-    # Validate email
-    if email.lower() != settings.ALLOWED_EMAIL.lower():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email not authorized"
-        )
+    # Import here to avoid circular imports
+    from buildmaster_ops import is_email_valid, load_valid_emails
+    
+    # Validate email against valid emails list
+    valid_emails = await load_valid_emails()
+    
+    # Fallback to config ALLOWED_EMAIL if no valid emails are configured
+    if not valid_emails:
+        if email.lower() != settings.ALLOWED_EMAIL.lower():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Email not authorized"
+            )
+    else:
+        if not await is_email_valid(email):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Email not authorized"
+            )
     
     # Hash provided OTP
     otp_hash = hash_otp(otp_code)

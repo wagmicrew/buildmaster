@@ -19,10 +19,17 @@ import {
   Eye,
   EyeOff,
   ChevronDown,
-  AlertTriangle
+  AlertTriangle,
+  Wrench,
+  GitBranch,
+  Mail,
+  Plus,
+  Trash2,
+  Download,
+  RotateCw
 } from 'lucide-react'
 
-type SettingsTab = 'development' | 'production' | 'database' | 'build' | 'pm2' | 'nginx' | 'server'
+type SettingsTab = 'development' | 'production' | 'database' | 'build' | 'pm2' | 'nginx' | 'server' | 'buildmaster'
 
 interface AppSettings {
   development: {
@@ -203,7 +210,8 @@ const menuItems = [
   { id: 'build' as SettingsTab, label: 'Build Engine', icon: Play, description: 'Build scripts & configuration' },
   { id: 'pm2' as SettingsTab, label: 'PM2', icon: Box, description: 'Process manager settings' },
   { id: 'nginx' as SettingsTab, label: 'Nginx', icon: Globe, description: 'Web server configuration' },
-  { id: 'server' as SettingsTab, label: 'Server', icon: Package, description: 'Packages & system updates' }
+  { id: 'server' as SettingsTab, label: 'Server', icon: Package, description: 'Packages & system updates' },
+  { id: 'buildmaster' as SettingsTab, label: 'BuildMaster', icon: Wrench, description: 'Self-update & access control' }
 ]
 
 export default function Settings() {
@@ -351,6 +359,149 @@ export default function Settings() {
 
   const togglePasswordVisibility = (key: string) => {
     setShowPasswords(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  // ============= BUILDMASTER STATE & QUERIES =============
+  const [buildmasterSettings, setBuildmasterSettings] = useState({
+    github: { repo: '', branch: 'main' },
+    autoUpdate: false
+  })
+  const [validEmails, setValidEmails] = useState<string[]>([])
+  const [newEmail, setNewEmail] = useState('')
+  const [updateStatus, setUpdateStatus] = useState<{
+    checking: boolean
+    updating: boolean
+    hasUpdates: boolean
+    commitsBehind: number
+    recentCommits: Array<{ hash: string; message: string }>
+    error: string | null
+  }>({
+    checking: false,
+    updating: false,
+    hasUpdates: false,
+    commitsBehind: 0,
+    recentCommits: [],
+    error: null
+  })
+  const [updateSteps, setUpdateSteps] = useState<Array<{ step: string; status: string; output?: string }>>([])
+
+  // Fetch BuildMaster settings
+  const { data: bmSettings } = useQuery({
+    queryKey: ['buildmaster-settings'],
+    queryFn: async () => {
+      const response = await api.get('/buildmaster/settings')
+      return response.data
+    },
+    enabled: activeTab === 'buildmaster'
+  })
+
+  // Fetch BuildMaster status
+  const { data: bmStatus, refetch: refetchBmStatus } = useQuery({
+    queryKey: ['buildmaster-status'],
+    queryFn: async () => {
+      const response = await api.get('/buildmaster/status')
+      return response.data
+    },
+    enabled: activeTab === 'buildmaster'
+  })
+
+  // Fetch valid emails
+  const { data: emailsData } = useQuery({
+    queryKey: ['valid-emails'],
+    queryFn: async () => {
+      const response = await api.get('/buildmaster/valid-emails')
+      return response.data
+    },
+    enabled: activeTab === 'buildmaster'
+  })
+
+  useEffect(() => {
+    if (bmSettings) {
+      setBuildmasterSettings(bmSettings)
+    }
+  }, [bmSettings])
+
+  useEffect(() => {
+    if (emailsData?.emails) {
+      setValidEmails(emailsData.emails)
+    }
+  }, [emailsData])
+
+  // Save BuildMaster settings mutation
+  const saveBmSettingsMutation = useMutation({
+    mutationFn: async (settings: typeof buildmasterSettings) => {
+      const response = await api.post('/buildmaster/settings', settings)
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['buildmaster-settings'] })
+    }
+  })
+
+  // Add email mutation
+  const addEmailMutation = useMutation({
+    mutationFn: async (email: string) => {
+      const response = await api.post('/buildmaster/valid-emails/add', { email })
+      return response.data
+    },
+    onSuccess: () => {
+      setNewEmail('')
+      queryClient.invalidateQueries({ queryKey: ['valid-emails'] })
+    }
+  })
+
+  // Remove email mutation
+  const removeEmailMutation = useMutation({
+    mutationFn: async (email: string) => {
+      const response = await api.post('/buildmaster/valid-emails/remove', { email })
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['valid-emails'] })
+    }
+  })
+
+  // Check for updates
+  const checkForUpdates = async () => {
+    setUpdateStatus(prev => ({ ...prev, checking: true, error: null }))
+    try {
+      const response = await api.post('/buildmaster/check-updates')
+      setUpdateStatus(prev => ({
+        ...prev,
+        checking: false,
+        hasUpdates: response.data.hasUpdates,
+        commitsBehind: response.data.commitsBehind || 0,
+        recentCommits: response.data.recentCommits || []
+      }))
+    } catch (error: any) {
+      setUpdateStatus(prev => ({
+        ...prev,
+        checking: false,
+        error: error.response?.data?.detail || 'Failed to check for updates'
+      }))
+    }
+  }
+
+  // Update application
+  const updateApplication = async () => {
+    setUpdateStatus(prev => ({ ...prev, updating: true, error: null }))
+    setUpdateSteps([])
+    try {
+      const response = await api.post('/buildmaster/update')
+      setUpdateSteps(response.data.steps || [])
+      if (response.data.success) {
+        setUpdateStatus(prev => ({ ...prev, updating: false, hasUpdates: false, commitsBehind: 0 }))
+        refetchBmStatus()
+      } else {
+        setUpdateStatus(prev => ({ ...prev, updating: false, error: response.data.error }))
+      }
+    } catch (error: any) {
+      setUpdateStatus(prev => ({
+        ...prev,
+        updating: false,
+        error: error.response?.data?.detail || 'Failed to update application'
+      }))
+    }
   }
 
   const renderDevelopmentSettings = () => (
@@ -1388,6 +1539,284 @@ export default function Settings() {
     </div>
   )
 
+  const renderBuildMasterSettings = () => (
+    <div className="space-y-6">
+      {/* Current Status */}
+      <div className="glass rounded-xl p-6">
+        <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <Wrench className="text-amber-400" size={20} />
+          BuildMaster Status
+        </h3>
+        
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div className="p-4 bg-black/30 rounded-lg">
+            <div className="text-sm text-slate-400 mb-1">Current Version</div>
+            <div className="text-white font-medium">{bmStatus?.currentCommit || 'Loading...'}</div>
+          </div>
+          <div className="p-4 bg-black/30 rounded-lg">
+            <div className="text-sm text-slate-400 mb-1">Branch</div>
+            <div className="text-white font-medium">{bmStatus?.currentBranch || 'Loading...'}</div>
+          </div>
+          <div className="p-4 bg-black/30 rounded-lg">
+            <div className="text-sm text-slate-400 mb-1">Service Status</div>
+            <div className={`font-medium ${bmStatus?.serviceStatus === 'online' ? 'text-green-400' : 'text-yellow-400'}`}>
+              {bmStatus?.serviceStatus || 'Loading...'}
+            </div>
+          </div>
+          <div className="p-4 bg-black/30 rounded-lg">
+            <div className="text-sm text-slate-400 mb-1">Valid Emails</div>
+            <div className="text-white font-medium">{validEmails.length} authorized</div>
+          </div>
+        </div>
+      </div>
+
+      {/* GitHub Repository Settings */}
+      <div className="glass rounded-xl p-6">
+        <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <GitBranch className="text-purple-400" size={20} />
+          GitHub Repository
+        </h3>
+        
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm text-slate-400 mb-2">Repository URL</label>
+            <input
+              type="text"
+              value={buildmasterSettings.github?.repo || ''}
+              onChange={(e) => setBuildmasterSettings(prev => ({
+                ...prev,
+                github: { ...prev.github, repo: e.target.value }
+              }))}
+              className="w-full bg-black/50 text-white p-3 rounded-lg border border-white/10 focus:border-purple-500/50 focus:outline-none"
+              placeholder="https://github.com/username/buildmaster.git"
+            />
+          </div>
+          
+          <div>
+            <label className="block text-sm text-slate-400 mb-2">Branch</label>
+            <input
+              type="text"
+              value={buildmasterSettings.github?.branch || 'main'}
+              onChange={(e) => setBuildmasterSettings(prev => ({
+                ...prev,
+                github: { ...prev.github, branch: e.target.value }
+              }))}
+              className="w-full bg-black/50 text-white p-3 rounded-lg border border-white/10 focus:border-purple-500/50 focus:outline-none"
+              placeholder="main"
+            />
+          </div>
+          
+          <button
+            onClick={() => saveBmSettingsMutation.mutate(buildmasterSettings)}
+            disabled={saveBmSettingsMutation.isPending}
+            className="px-4 py-2 bg-purple-500/20 text-purple-400 rounded-lg hover:bg-purple-500/30 transition-colors flex items-center gap-2"
+          >
+            {saveBmSettingsMutation.isPending ? (
+              <Loader className="animate-spin" size={16} />
+            ) : (
+              <Save size={16} />
+            )}
+            Save Repository Settings
+          </button>
+        </div>
+      </div>
+
+      {/* Update Section */}
+      <div className="glass rounded-xl p-6">
+        <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <Download className="text-cyan-400" size={20} />
+          Application Updates
+        </h3>
+        
+        <div className="space-y-4">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={checkForUpdates}
+              disabled={updateStatus.checking}
+              className="px-4 py-2 bg-cyan-500/20 text-cyan-400 rounded-lg hover:bg-cyan-500/30 transition-colors flex items-center gap-2"
+            >
+              {updateStatus.checking ? (
+                <Loader className="animate-spin" size={16} />
+              ) : (
+                <RefreshCw size={16} />
+              )}
+              Check for Updates
+            </button>
+            
+            {updateStatus.hasUpdates && (
+              <span className="px-3 py-1 bg-yellow-500/20 text-yellow-400 rounded-full text-sm">
+                {updateStatus.commitsBehind} commit{updateStatus.commitsBehind !== 1 ? 's' : ''} behind
+              </span>
+            )}
+          </div>
+          
+          {updateStatus.error && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              {updateStatus.error}
+            </div>
+          )}
+          
+          {updateStatus.hasUpdates && updateStatus.recentCommits.length > 0 && (
+            <div className="p-4 bg-black/30 rounded-lg">
+              <div className="text-sm text-slate-400 mb-2">Recent commits:</div>
+              <div className="space-y-2">
+                {updateStatus.recentCommits.slice(0, 5).map((commit, idx) => (
+                  <div key={idx} className="flex items-start gap-2 text-sm">
+                    <code className="text-cyan-400 font-mono">{commit.hash}</code>
+                    <span className="text-slate-300">{commit.message}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {updateStatus.hasUpdates && (
+            <button
+              onClick={updateApplication}
+              disabled={updateStatus.updating}
+              className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
+            >
+              {updateStatus.updating ? (
+                <>
+                  <Loader className="animate-spin" size={16} />
+                  Updating...
+                </>
+              ) : (
+                <>
+                  <Download size={16} />
+                  Update Application
+                </>
+              )}
+            </button>
+          )}
+          
+          {updateSteps.length > 0 && (
+            <div className="p-4 bg-black/30 rounded-lg space-y-2">
+              <div className="text-sm text-slate-400 mb-2">Update progress:</div>
+              {updateSteps.map((step, idx) => (
+                <div key={idx} className="flex items-center gap-2 text-sm">
+                  {step.status === 'success' ? (
+                    <CheckCircle className="text-green-400" size={14} />
+                  ) : step.status === 'error' ? (
+                    <XCircle className="text-red-400" size={14} />
+                  ) : (
+                    <Loader className="text-yellow-400 animate-spin" size={14} />
+                  )}
+                  <span className={step.status === 'error' ? 'text-red-400' : 'text-slate-300'}>
+                    {step.step}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Valid Emails (Access Control) */}
+      <div className="glass rounded-xl p-6">
+        <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <Mail className="text-rose-400" size={20} />
+          Authorized Users
+        </h3>
+        
+        <p className="text-slate-400 text-sm mb-4">
+          Only these email addresses can request OTP codes and access the BuildMaster dashboard.
+          Emails are stored encrypted for security.
+        </p>
+        
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <input
+              type="email"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              placeholder="Enter email address"
+              className="flex-1 bg-black/50 text-white p-3 rounded-lg border border-white/10 focus:border-rose-500/50 focus:outline-none"
+            />
+            <button
+              onClick={() => {
+                if (newEmail) {
+                  addEmailMutation.mutate(newEmail)
+                }
+              }}
+              disabled={addEmailMutation.isPending || !newEmail}
+              className="px-4 py-3 bg-rose-500/20 text-rose-400 rounded-lg hover:bg-rose-500/30 transition-colors disabled:opacity-50"
+            >
+              {addEmailMutation.isPending ? (
+                <Loader className="animate-spin" size={20} />
+              ) : (
+                <Plus size={20} />
+              )}
+            </button>
+          </div>
+          
+          <div className="space-y-2">
+            {validEmails.map((email, idx) => (
+              <div key={idx} className="flex items-center justify-between p-3 bg-black/30 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Mail className="text-slate-500" size={16} />
+                  <span className="text-white">{email}</span>
+                </div>
+                <button
+                  onClick={() => removeEmailMutation.mutate(email)}
+                  disabled={removeEmailMutation.isPending || validEmails.length <= 1}
+                  className="p-2 text-slate-400 hover:text-red-400 transition-colors disabled:opacity-30"
+                  title={validEmails.length <= 1 ? "Cannot remove last email" : "Remove email"}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+          
+          {validEmails.length === 0 && (
+            <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-yellow-300 text-sm">
+              No valid emails configured. Add at least one email to enable authentication.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Service Control */}
+      <div className="glass rounded-xl p-6">
+        <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <RotateCw className="text-orange-400" size={20} />
+          Service Control
+        </h3>
+        
+        <div className="p-4 bg-orange-500/10 border border-orange-500/30 rounded-lg mb-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="text-orange-400 mt-0.5" size={20} />
+            <div>
+              <div className="text-orange-300 font-medium mb-1">Restart Service</div>
+              <p className="text-sm text-orange-200/70">
+                Restarting the BuildMaster API will temporarily disconnect all users.
+                The page will automatically reconnect after the restart.
+              </p>
+            </div>
+          </div>
+        </div>
+        
+        <button
+          onClick={async () => {
+            try {
+              await api.post('/buildmaster/restart')
+              // Wait a bit for the service to restart, then reload
+              setTimeout(() => window.location.reload(), 3000)
+            } catch (e) {
+              // Service is restarting, this is expected
+              setTimeout(() => window.location.reload(), 3000)
+            }
+          }}
+          className="px-4 py-2 bg-orange-500/20 text-orange-400 rounded-lg hover:bg-orange-500/30 transition-colors flex items-center gap-2"
+        >
+          <RotateCw size={16} />
+          Restart BuildMaster Service
+        </button>
+      </div>
+    </div>
+  )
+
   const renderContent = () => {
     switch (activeTab) {
       case 'development': return renderDevelopmentSettings()
@@ -1397,6 +1826,7 @@ export default function Settings() {
       case 'pm2': return renderPM2Settings()
       case 'nginx': return renderNginxSettings()
       case 'server': return renderServerSettings()
+      case 'buildmaster': return renderBuildMasterSettings()
       default: return null
     }
   }
