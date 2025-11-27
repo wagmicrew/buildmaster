@@ -1,7 +1,14 @@
-import { useState } from 'react'
-import { Play, Loader, Settings, Zap, Activity, Rocket, AlertCircle } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Play, Loader, Settings, Zap, Activity, Rocket, AlertCircle, Terminal } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import api from '../services/api'
+
+interface BuildScript {
+  name: string
+  command: string
+  category: string
+  recommended: boolean
+}
 
 export default function BuildConfigTab({ 
   config, 
@@ -13,6 +20,23 @@ export default function BuildConfigTab({
   startBuildMutation: any
 }) {
   const [buildType, setBuildType] = useState<'development' | 'production'>('development')
+  const [selectedScript, setSelectedScript] = useState<string>('build:server')
+  
+  // Fetch available build scripts from dev
+  const { data: buildScriptsData } = useQuery({
+    queryKey: ['build-scripts'],
+    queryFn: async () => {
+      const response = await api.get('/build/scripts')
+      return response.data
+    },
+  })
+
+  // Set default script when data loads
+  useEffect(() => {
+    if (buildScriptsData?.default) {
+      setSelectedScript(buildScriptsData.default)
+    }
+  }, [buildScriptsData])
   
   // Check for active builds
   const { data: activeBuildCheck } = useQuery({
@@ -35,6 +59,30 @@ export default function BuildConfigTab({
       </div>
 
       <div className="space-y-6">
+        {/* Build Script Selection */}
+        <div className="bg-gradient-to-br from-purple-500/20 to-indigo-500/20 rounded-xl p-4 border border-purple-500/30">
+          <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
+            <Terminal size={16} className="text-purple-400" />
+            Build Script (from dev)
+          </label>
+          <select
+            value={selectedScript}
+            onChange={(e) => setSelectedScript(e.target.value)}
+            className="w-full bg-slate-800 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20"
+          >
+            {buildScriptsData?.scripts?.map((script: BuildScript) => (
+              <option key={script.name} value={script.name} className="bg-slate-800 text-white">
+                {script.name} {script.recommended ? '⭐' : ''} [{script.category}]
+              </option>
+            ))}
+          </select>
+          {buildScriptsData?.scripts?.find((s: BuildScript) => s.name === selectedScript) && (
+            <p className="text-xs text-slate-400 mt-2 font-mono truncate">
+              {buildScriptsData.scripts.find((s: BuildScript) => s.name === selectedScript)?.command}
+            </p>
+          )}
+        </div>
+
         {/* Build Mode */}
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -367,7 +415,7 @@ export default function BuildConfigTab({
 
         {/* Start Build Button */}
         <button
-          onClick={() => startBuildMutation.mutate({ ...config, build_type: buildType })}
+          onClick={() => startBuildMutation.mutate({ ...config, build_type: buildType, build_script: selectedScript })}
           disabled={startBuildMutation.isPending || activeBuildCheck?.has_active_build}
           className="w-full py-4 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-all flex items-center justify-center gap-3 shadow-lg"
         >
@@ -385,6 +433,7 @@ export default function BuildConfigTab({
             <>
               {buildType === 'production' ? <Rocket size={20} /> : <Play size={20} />}
               Start {buildType === 'production' ? 'Production' : 'Development'} Build
+              <span className="text-xs opacity-75">({selectedScript})</span>
             </>
           )}
         </button>

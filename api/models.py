@@ -76,6 +76,7 @@ class BuildConfig(BaseModel):
     max_semi_space_size: Optional[int] = Field(None, ge=0, le=4096)
     build_mode: BuildMode = BuildMode.FULL
     build_type: Optional[str] = Field('development', description="Build type: development or production")
+    build_script: Optional[str] = Field('build:server', description="NPM script to run for build")
     test_database: bool = True
     test_redis: bool = True
     skip_deps: bool = False

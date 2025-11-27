@@ -459,6 +459,59 @@ async def build_disk_usage_endpoint(
         )
 
 
+@app.get("/api/build/scripts", response_model=dict)
+async def build_scripts_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Get available build scripts from dev package.json"""
+    try:
+        import json
+        package_json_path = Path(settings.DEV_DIR) / "package.json"
+        
+        if not package_json_path.exists():
+            return {"scripts": [], "error": "package.json not found"}
+        
+        with open(package_json_path, "r") as f:
+            package_data = json.load(f)
+        
+        all_scripts = package_data.get("scripts", {})
+        
+        # Filter for build-related scripts
+        build_scripts = []
+        for name, command in all_scripts.items():
+            if any(keyword in name.lower() for keyword in ['build', 'compile', 'production']):
+                # Categorize the script
+                if 'server' in name.lower():
+                    category = 'server'
+                elif 'quick' in name.lower():
+                    category = 'quick'
+                elif 'production' in name.lower() or 'prod' in name.lower():
+                    category = 'production'
+                else:
+                    category = 'standard'
+                
+                build_scripts.append({
+                    "name": name,
+                    "command": command,
+                    "category": category,
+                    "recommended": name in ['build:server', 'build', 'build:server:quick']
+                })
+        
+        # Sort: recommended first, then by category
+        build_scripts.sort(key=lambda x: (not x['recommended'], x['category'], x['name']))
+        
+        return {
+            "scripts": build_scripts,
+            "default": "build:server",
+            "dev_path": settings.DEV_DIR
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
 # Deploy operations
 @app.post("/api/deploy/golive", response_model=dict)
 async def deploy_golive_endpoint(

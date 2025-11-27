@@ -368,11 +368,15 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
         if workers and workers > 0:
             env["BUILD_WORKERS"] = str(workers)
         
-        # Run pnpm run build:server
+        # Get build script from config or use default
+        build_script = getattr(config, 'build_script', None) or "build:server"
+        
+        # Run the selected build script
         with open(log_path, "w", encoding='utf-8', errors='replace') as log_file:
             # Write initial header
             log_file.write(f"[BUILD] BuildMaster Build Started\n")
             log_file.write(f"[INFO] Build ID: {build_id}\n")
+            log_file.write(f"[INFO] Build Script: pnpm run {build_script}\n")
             log_file.write(f"[INFO] Mode: {build_mode}\n")
             log_file.write(f"[INFO] Working Directory: {working_dir}\n")
             log_file.write(f"[INFO] Skip Deps: {env['SKIP_DEPS']}\n")
@@ -381,7 +385,7 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
             log_file.flush()
             
             process = await asyncio.create_subprocess_exec(
-                "pnpm", "run", "build:server",
+                "pnpm", "run", build_script,
                 cwd=working_dir,
                 env=env,
                 stdout=log_file,
