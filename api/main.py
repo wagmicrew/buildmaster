@@ -20,7 +20,7 @@ from models import (
     ErrorResponse
 )
 from auth import request_otp, verify_otp, verify_session, cleanup_expired_sessions
-from git_ops import pull_from_git, get_available_branches
+from git_ops import pull_from_git, get_available_branches, get_incoming_changes, check_buildmaster_repo_status, pull_with_env, push_to_buildmaster
 from pm2_ops import reload_pm2_app
 from build_ops import start_build, get_build_status, get_build_logs, get_build_history, check_active_build, kill_build
 from build_dashboard_ops import install_build_dashboard, get_build_dashboard_status
@@ -727,6 +727,83 @@ async def git_commit_timeline_endpoint(
     try:
         timeline = await get_commit_timeline()
         return {"commits": timeline}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+# BuildMaster Git Pull endpoints
+@app.get("/api/git/preview-pull", response_model=dict)
+async def git_preview_pull_endpoint(
+    env: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """Preview incoming changes before pulling"""
+    try:
+        working_dir = settings.DEV_DIR if env == "dev" else settings.PROD_DIR
+        result = get_incoming_changes(working_dir)
+        
+        # If there are BuildMaster files, check their status
+        if result.get("success") and result.get("buildmaster_files"):
+            bm_status = check_buildmaster_repo_status(result["buildmaster_files"])
+            result["buildmaster_status"] = bm_status
+        
+        result["env"] = env
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/git/pull-env", response_model=dict)
+async def git_pull_env_endpoint(
+    env: str = "dev",
+    branch: str = None,
+    stash: bool = False,
+    force: bool = False,
+    email: str = Depends(verify_session_token)
+):
+    """Pull from git for a specific environment without auto-restart"""
+    try:
+        result = await pull_with_env(env, branch, stash, force)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/git/push-buildmaster", response_model=dict)
+async def git_push_buildmaster_endpoint(
+    commit_message: str = None,
+    email: str = Depends(verify_session_token)
+):
+    """Push changes to BuildMaster repo"""
+    try:
+        result = push_to_buildmaster(commit_message)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/pm2/restart", response_model=dict)
+async def pm2_restart_endpoint(
+    env: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """Restart PM2 process for environment"""
+    try:
+        app_name = "dintrafikskolax-dev" if env == "dev" else "dintrafikskolax-prod"
+        result = await reload_pm2_app(app_name)
+        return {"success": True, "message": f"Restarted {app_name}", "result": result}
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

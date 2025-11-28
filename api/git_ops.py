@@ -311,3 +311,317 @@ async def pull_from_git(request: GitPullRequest) -> GitPullResponse:
             message=f"Pull error: {str(e)}"
         )
 
+
+# BuildMaster directory for code detection
+BUILDMASTER_DIR = "/var/www/build"
+BUILDMASTER_PATTERNS = [
+    "Documentation_new/build-dashboard/",
+    "scripts/build-dashboard/",
+    "build-dashboard/",
+]
+
+
+def get_incoming_changes(working_dir: str, branch: str = None) -> dict:
+    """Fetch and check what changes would be pulled without actually pulling"""
+    try:
+        # Fetch first
+        fetch_result = subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if fetch_result.returncode != 0:
+            return {"success": False, "error": f"Fetch failed: {fetch_result.stderr}"}
+        
+        # Get current branch if not specified
+        if not branch:
+            branch_result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "main"
+        
+        # Get incoming changes (diff between local and remote)
+        diff_result = subprocess.run(
+            ["git", "log", f"HEAD..origin/{branch}", "--name-only", "--oneline"],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if diff_result.returncode != 0:
+            return {"success": False, "error": f"Diff failed: {diff_result.stderr}"}
+        
+        output = diff_result.stdout.strip()
+        if not output:
+            return {
+                "success": True,
+                "has_changes": False,
+                "commits": [],
+                "files": [],
+                "buildmaster_files": [],
+                "message": "Already up to date"
+            }
+        
+        # Parse commits and files
+        commits = []
+        files = set()
+        buildmaster_files = []
+        
+        for line in output.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Commit lines start with a hash
+            if len(line.split()[0]) >= 7 and line.split()[0].isalnum():
+                parts = line.split(" ", 1)
+                if len(parts) == 2:
+                    commits.append({"hash": parts[0], "message": parts[1]})
+            else:
+                # File path
+                files.add(line)
+                # Check if it's a BuildMaster file
+                for pattern in BUILDMASTER_PATTERNS:
+                    if line.startswith(pattern) or pattern in line:
+                        buildmaster_files.append(line)
+                        break
+        
+        return {
+            "success": True,
+            "has_changes": True,
+            "commits": commits,
+            "files": list(files),
+            "buildmaster_files": buildmaster_files,
+            "commit_count": len(commits),
+            "file_count": len(files),
+            "branch": branch
+        }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def check_buildmaster_repo_status(files: list) -> dict:
+    """Check if BuildMaster files from main repo exist in BuildMaster repo"""
+    try:
+        if not os.path.exists(BUILDMASTER_DIR):
+            return {"success": False, "error": "BuildMaster directory not found"}
+        
+        # Get BuildMaster repo status
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=BUILDMASTER_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        # Get current commit hash
+        hash_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=BUILDMASTER_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        # Check if BuildMaster has unpushed changes
+        unpushed_result = subprocess.run(
+            ["git", "log", "origin/main..HEAD", "--oneline"],
+            cwd=BUILDMASTER_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        has_local_changes = bool(status_result.stdout.strip())
+        unpushed_commits = [line for line in unpushed_result.stdout.strip().split("\n") if line]
+        
+        # Map main repo files to BuildMaster paths
+        file_mapping = []
+        for file in files:
+            # Extract just the relative path within build-dashboard
+            for pattern in BUILDMASTER_PATTERNS:
+                if file.startswith(pattern):
+                    relative_path = file[len(pattern):]
+                    buildmaster_path = os.path.join(BUILDMASTER_DIR, relative_path)
+                    exists_in_bm = os.path.exists(buildmaster_path)
+                    file_mapping.append({
+                        "main_repo_path": file,
+                        "buildmaster_path": relative_path,
+                        "exists_in_buildmaster": exists_in_bm
+                    })
+                    break
+        
+        return {
+            "success": True,
+            "has_local_changes": has_local_changes,
+            "unpushed_commits": unpushed_commits,
+            "current_hash": hash_result.stdout.strip() if hash_result.returncode == 0 else None,
+            "file_mapping": file_mapping,
+            "should_push_instead": has_local_changes or len(unpushed_commits) > 0
+        }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def pull_with_env(env: str, branch: str = None, stash: bool = False, force: bool = False) -> dict:
+    """Pull from git for a specific environment (dev or prod)"""
+    working_dir = settings.DEV_DIR if env == "dev" else settings.PROD_DIR
+    
+    if not os.path.exists(working_dir):
+        return {"success": False, "error": f"Directory not found: {working_dir}"}
+    
+    # Check for local changes
+    status = check_git_status(working_dir)
+    
+    if status.get("has_changes"):
+        if force:
+            success, message = delete_changes(working_dir)
+            if not success:
+                return {"success": False, "error": f"Failed to delete changes: {message}", "files": status.get("files", [])}
+        elif stash:
+            success, message = stash_changes(working_dir)
+            if not success:
+                return {"success": False, "error": f"Failed to stash changes: {message}", "files": status.get("files", [])}
+        else:
+            return {
+                "success": False,
+                "error": "Local changes detected",
+                "has_local_changes": True,
+                "files": status.get("files", [])
+            }
+    
+    # Fetch and pull
+    try:
+        fetch_result = subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if fetch_result.returncode != 0:
+            return {"success": False, "error": f"Fetch failed: {fetch_result.stderr}"}
+        
+        # Get branch
+        if not branch:
+            branch_result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "main"
+        
+        # Pull
+        pull_result = subprocess.run(
+            ["git", "pull", "origin", branch],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        if pull_result.returncode != 0:
+            return {"success": False, "error": f"Pull failed: {pull_result.stderr or pull_result.stdout}"}
+        
+        # Check what was pulled
+        output = pull_result.stdout.strip()
+        already_up_to_date = "Already up to date" in output
+        
+        # Get changed files
+        changed_files = []
+        if not already_up_to_date:
+            try:
+                diff_result = subprocess.run(
+                    ["git", "diff", "--name-only", "HEAD@{1}", "HEAD"],
+                    cwd=working_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if diff_result.returncode == 0:
+                    changed_files = [f for f in diff_result.stdout.strip().split("\n") if f.strip()]
+            except:
+                pass
+        
+        return {
+            "success": True,
+            "message": "Already up to date" if already_up_to_date else f"Pulled {len(changed_files)} file(s)",
+            "already_up_to_date": already_up_to_date,
+            "changed_files": changed_files,
+            "branch": branch,
+            "env": env
+        }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def push_to_buildmaster(commit_message: str = None) -> dict:
+    """Push BuildMaster changes to its repo"""
+    try:
+        if not os.path.exists(BUILDMASTER_DIR):
+            return {"success": False, "error": "BuildMaster directory not found"}
+        
+        # Check for changes
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=BUILDMASTER_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if status_result.stdout.strip():
+            # Stage all changes
+            subprocess.run(
+                ["git", "add", "-A"],
+                cwd=BUILDMASTER_DIR,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            # Commit
+            msg = commit_message or "BuildMaster update from main repo"
+            commit_result = subprocess.run(
+                ["git", "commit", "-m", msg],
+                cwd=BUILDMASTER_DIR,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if commit_result.returncode != 0:
+                return {"success": False, "error": f"Commit failed: {commit_result.stderr}"}
+        
+        # Push
+        push_result = subprocess.run(
+            ["git", "push", "origin", "main"],
+            cwd=BUILDMASTER_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if push_result.returncode != 0:
+            return {"success": False, "error": f"Push failed: {push_result.stderr}"}
+        
+        return {"success": True, "message": "Successfully pushed to BuildMaster repo"}
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+

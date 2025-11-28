@@ -27,7 +27,8 @@ import {
   Plus,
   Trash2,
   Download,
-  RotateCw
+  RotateCw,
+  Upload
 } from 'lucide-react'
 
 type SettingsTab = 'development' | 'production' | 'database' | 'build' | 'pm2' | 'nginx' | 'server' | 'buildmaster'
@@ -470,6 +471,16 @@ export default function Settings() {
   })
   const [updateSteps, setUpdateSteps] = useState<Array<{ step: string; status: string; output?: string }>>([])
 
+  // Git Pull state
+  const [gitPullEnv, setGitPullEnv] = useState<'dev' | 'prod'>('dev')
+  const [gitPullPreview, setGitPullPreview] = useState<any>(null)
+  const [gitPullLoading, setGitPullLoading] = useState(false)
+  const [gitPullResult, setGitPullResult] = useState<any>(null)
+  const [showRestartConfirm, setShowRestartConfirm] = useState(false)
+  const [showPushConfirm, setShowPushConfirm] = useState(false)
+  const [showLocalChangesWarning, setShowLocalChangesWarning] = useState(false)
+  const [localChangesFiles, setLocalChangesFiles] = useState<string[]>([])
+
   // Fetch BuildMaster settings
   const { data: bmSettings } = useQuery({
     queryKey: ['buildmaster-settings'],
@@ -586,6 +597,74 @@ export default function Settings() {
         updating: false,
         error: error.response?.data?.detail || 'Failed to update application'
       }))
+    }
+  }
+
+  // Git Pull Preview
+  const previewGitPull = async () => {
+    setGitPullLoading(true)
+    setGitPullPreview(null)
+    setGitPullResult(null)
+    try {
+      const response = await api.get(`/git/preview-pull?env=${gitPullEnv}`)
+      setGitPullPreview(response.data)
+      
+      // If BuildMaster code is detected and should push instead, show push confirm
+      if (response.data.buildmaster_files?.length > 0 && response.data.buildmaster_status?.should_push_instead) {
+        setShowPushConfirm(true)
+      }
+    } catch (error: any) {
+      setGitPullPreview({ error: error.response?.data?.detail || 'Failed to preview changes' })
+    } finally {
+      setGitPullLoading(false)
+    }
+  }
+
+  // Execute Git Pull
+  const executeGitPull = async (stash = false, force = false) => {
+    setGitPullLoading(true)
+    setShowLocalChangesWarning(false)
+    try {
+      const response = await api.post(`/git/pull-env?env=${gitPullEnv}&stash=${stash}&force=${force}`)
+      setGitPullResult(response.data)
+      
+      // If local changes detected, show warning
+      if (!response.data.success && response.data.has_local_changes) {
+        setLocalChangesFiles(response.data.files || [])
+        setShowLocalChangesWarning(true)
+      } else if (response.data.success && !response.data.already_up_to_date) {
+        // Show restart confirmation after successful pull
+        setShowRestartConfirm(true)
+      }
+    } catch (error: any) {
+      setGitPullResult({ error: error.response?.data?.detail || 'Pull failed' })
+    } finally {
+      setGitPullLoading(false)
+    }
+  }
+
+  // Push to BuildMaster
+  const pushToBuildMaster = async () => {
+    setGitPullLoading(true)
+    try {
+      const response = await api.post('/git/push-buildmaster')
+      setGitPullResult(response.data)
+      setShowPushConfirm(false)
+    } catch (error: any) {
+      setGitPullResult({ error: error.response?.data?.detail || 'Push failed' })
+    } finally {
+      setGitPullLoading(false)
+    }
+  }
+
+  // Restart PM2
+  const restartPm2 = async () => {
+    try {
+      await api.post(`/pm2/restart?env=${gitPullEnv}`)
+      setShowRestartConfirm(false)
+      setGitPullResult((prev: any) => ({ ...prev, restarted: true }))
+    } catch (error: any) {
+      setGitPullResult((prev: any) => ({ ...prev, restartError: error.response?.data?.detail || 'Restart failed' }))
     }
   }
 
@@ -1754,6 +1833,254 @@ export default function Settings() {
           </div>
         </div>
       </div>
+
+      {/* Git Pull for Dev/Prod */}
+      <div className="glass rounded-xl p-6">
+        <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <Download className="text-green-400" size={20} />
+          Git Pull
+        </h3>
+        
+        <div className="space-y-4">
+          {/* Environment Selector */}
+          <div>
+            <label className="block text-sm text-slate-400 mb-2">Environment</label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setGitPullEnv('dev'); setGitPullPreview(null); setGitPullResult(null); }}
+                className={`flex-1 py-2 px-4 rounded-lg transition-colors ${
+                  gitPullEnv === 'dev' 
+                    ? 'bg-sky-500/30 text-sky-400 border border-sky-500/50' 
+                    : 'bg-black/30 text-slate-400 border border-white/10 hover:bg-black/50'
+                }`}
+              >
+                Development
+              </button>
+              <button
+                onClick={() => { setGitPullEnv('prod'); setGitPullPreview(null); setGitPullResult(null); }}
+                className={`flex-1 py-2 px-4 rounded-lg transition-colors ${
+                  gitPullEnv === 'prod' 
+                    ? 'bg-emerald-500/30 text-emerald-400 border border-emerald-500/50' 
+                    : 'bg-black/30 text-slate-400 border border-white/10 hover:bg-black/50'
+                }`}
+              >
+                Production
+              </button>
+            </div>
+          </div>
+
+          {/* Preview & Pull Buttons */}
+          <div className="flex gap-2">
+            <button
+              onClick={previewGitPull}
+              disabled={gitPullLoading}
+              className="flex-1 px-4 py-2 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30 transition-colors flex items-center justify-center gap-2"
+            >
+              {gitPullLoading ? <Loader className="animate-spin" size={16} /> : <Eye size={16} />}
+              Preview Changes
+            </button>
+            <button
+              onClick={() => executeGitPull()}
+              disabled={gitPullLoading}
+              className="flex-1 px-4 py-2 bg-green-500/20 text-green-400 rounded-lg hover:bg-green-500/30 transition-colors flex items-center justify-center gap-2"
+            >
+              {gitPullLoading ? <Loader className="animate-spin" size={16} /> : <Download size={16} />}
+              Pull from Git
+            </button>
+          </div>
+
+          {/* Preview Results */}
+          {gitPullPreview && (
+            <div className="p-4 bg-black/30 rounded-lg space-y-3">
+              {gitPullPreview.error ? (
+                <div className="text-red-400">{gitPullPreview.error}</div>
+              ) : !gitPullPreview.has_changes ? (
+                <div className="text-green-400 flex items-center gap-2">
+                  <CheckCircle size={16} />
+                  Already up to date - no changes to pull
+                </div>
+              ) : (
+                <>
+                  <div className="text-slate-300">
+                    <span className="text-cyan-400 font-medium">{gitPullPreview.commit_count}</span> commit(s), 
+                    <span className="text-cyan-400 font-medium"> {gitPullPreview.file_count}</span> file(s) to pull
+                  </div>
+                  
+                  {gitPullPreview.commits?.slice(0, 5).map((commit: any, idx: number) => (
+                    <div key={idx} className="flex items-start gap-2 text-sm">
+                      <code className="text-cyan-400 font-mono text-xs">{commit.hash}</code>
+                      <span className="text-slate-400">{commit.message}</span>
+                    </div>
+                  ))}
+                  
+                  {gitPullPreview.buildmaster_files?.length > 0 && (
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                      <div className="text-amber-400 font-medium flex items-center gap-2 mb-2">
+                        <AlertTriangle size={16} />
+                        BuildMaster Code Detected
+                      </div>
+                      <div className="text-sm text-amber-200/70">
+                        {gitPullPreview.buildmaster_files.length} file(s) affect BuildMaster.
+                        {gitPullPreview.buildmaster_status?.should_push_instead && (
+                          <span className="block mt-1 text-amber-300">
+                            BuildMaster has local changes. Consider pushing instead of pulling.
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Pull Result */}
+          {gitPullResult && (
+            <div className={`p-4 rounded-lg ${
+              gitPullResult.success 
+                ? 'bg-green-500/10 border border-green-500/30' 
+                : 'bg-red-500/10 border border-red-500/30'
+            }`}>
+              {gitPullResult.error ? (
+                <div className="text-red-400">{gitPullResult.error}</div>
+              ) : (
+                <>
+                  <div className={`flex items-center gap-2 ${gitPullResult.success ? 'text-green-400' : 'text-red-400'}`}>
+                    {gitPullResult.success ? <CheckCircle size={16} /> : <XCircle size={16} />}
+                    {gitPullResult.message}
+                  </div>
+                  {gitPullResult.changed_files?.length > 0 && (
+                    <div className="mt-2 text-sm text-slate-400">
+                      Changed: {gitPullResult.changed_files.slice(0, 5).join(', ')}
+                      {gitPullResult.changed_files.length > 5 && ` (+${gitPullResult.changed_files.length - 5} more)`}
+                    </div>
+                  )}
+                  {gitPullResult.restarted && (
+                    <div className="mt-2 text-green-400 flex items-center gap-2">
+                      <CheckCircle size={14} />
+                      Server restarted successfully
+                    </div>
+                  )}
+                  {gitPullResult.restartError && (
+                    <div className="mt-2 text-red-400">{gitPullResult.restartError}</div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Restart Confirmation Modal */}
+      {showRestartConfirm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full mx-4">
+            <h4 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+              <RotateCw className="text-amber-400" size={20} />
+              Restart Server?
+            </h4>
+            <p className="text-slate-400 mb-6">
+              Changes have been pulled. Do you want to restart the {gitPullEnv === 'dev' ? 'development' : 'production'} server now?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowRestartConfirm(false)}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600"
+              >
+                Not Now
+              </button>
+              <button
+                onClick={restartPm2}
+                className="flex-1 px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 flex items-center justify-center gap-2"
+              >
+                <RotateCw size={16} />
+                Restart
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Local Changes Warning Modal */}
+      {showLocalChangesWarning && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full mx-4">
+            <h4 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+              <AlertTriangle className="text-yellow-400" size={20} />
+              Local Changes Detected
+            </h4>
+            <p className="text-slate-400 mb-4">
+              The {gitPullEnv} environment has uncommitted changes that may be overwritten.
+            </p>
+            {localChangesFiles.length > 0 && (
+              <div className="p-3 bg-black/30 rounded-lg mb-4 max-h-32 overflow-y-auto">
+                <div className="text-xs text-slate-500 font-mono space-y-1">
+                  {localChangesFiles.slice(0, 10).map((file, idx) => (
+                    <div key={idx}>{file}</div>
+                  ))}
+                  {localChangesFiles.length > 10 && (
+                    <div className="text-slate-600">+{localChangesFiles.length - 10} more files</div>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => setShowLocalChangesWarning(false)}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => executeGitPull(true, false)}
+                className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+              >
+                Stash & Pull
+              </button>
+              <button
+                onClick={() => executeGitPull(false, true)}
+                className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+              >
+                Discard & Pull
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Push to BuildMaster Modal */}
+      {showPushConfirm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full mx-4">
+            <h4 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+              <GitBranch className="text-purple-400" size={20} />
+              BuildMaster Code Detected
+            </h4>
+            <p className="text-slate-400 mb-4">
+              The incoming changes include BuildMaster code, but BuildMaster has local changes that haven't been pushed.
+            </p>
+            <p className="text-amber-400 text-sm mb-6">
+              Would you like to push BuildMaster changes first instead of pulling?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowPushConfirm(false)}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600"
+              >
+                Continue with Pull
+              </button>
+              <button
+                onClick={pushToBuildMaster}
+                disabled={gitPullLoading}
+                className="flex-1 px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 flex items-center justify-center gap-2"
+              >
+                {gitPullLoading ? <Loader className="animate-spin" size={16} /> : <Upload size={16} />}
+                Push BuildMaster
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* GitHub Repository Settings */}
       <div className="glass rounded-xl p-6">
