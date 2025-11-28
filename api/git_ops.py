@@ -525,17 +525,32 @@ async def pull_with_env(env: str, branch: str = None, stash: bool = False, force
             )
             branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "main"
         
-        # Pull
+        # Try pull with rebase first
         pull_result = subprocess.run(
-            ["git", "pull", "origin", branch],
+            ["git", "pull", "--rebase", "origin", branch],
             cwd=working_dir,
             capture_output=True,
             text=True,
             timeout=120
         )
         
+        # If rebase fails due to divergent branches, try reset to origin
         if pull_result.returncode != 0:
-            return {"success": False, "error": f"Pull failed: {pull_result.stderr or pull_result.stdout}"}
+            error_output = pull_result.stderr or pull_result.stdout
+            if "divergent" in error_output.lower() or "need to specify" in error_output.lower():
+                # Reset to origin branch (force sync)
+                reset_result = subprocess.run(
+                    ["git", "reset", "--hard", f"origin/{branch}"],
+                    cwd=working_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if reset_result.returncode != 0:
+                    return {"success": False, "error": f"Reset failed: {reset_result.stderr}"}
+                pull_result = reset_result  # Use reset result for success
+            else:
+                return {"success": False, "error": f"Pull failed: {error_output}"}
         
         # Check what was pulled
         output = pull_result.stdout.strip()
