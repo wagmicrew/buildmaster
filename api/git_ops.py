@@ -347,6 +347,22 @@ def get_incoming_changes(working_dir: str, branch: str = None) -> dict:
             )
             branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "main"
         
+        # Check ahead/behind status
+        rev_list_result = subprocess.run(
+            ["git", "rev-list", "--left-right", "--count", f"HEAD...origin/{branch}"],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        ahead = 0
+        behind = 0
+        if rev_list_result.returncode == 0:
+            parts = rev_list_result.stdout.strip().split()
+            if len(parts) == 2:
+                ahead = int(parts[0])
+                behind = int(parts[1])
+        
         # Get incoming changes (diff between local and remote)
         diff_result = subprocess.run(
             ["git", "log", f"HEAD..origin/{branch}", "--name-only", "--oneline"],
@@ -361,13 +377,19 @@ def get_incoming_changes(working_dir: str, branch: str = None) -> dict:
         
         output = diff_result.stdout.strip()
         if not output:
+            message = "Already up to date"
+            if ahead > 0:
+                message = f"Local is {ahead} commit(s) ahead of remote - nothing to pull"
             return {
                 "success": True,
                 "has_changes": False,
                 "commits": [],
                 "files": [],
                 "buildmaster_files": [],
-                "message": "Already up to date"
+                "message": message,
+                "ahead": ahead,
+                "behind": behind,
+                "branch": branch
             }
         
         # Parse commits and files
@@ -402,7 +424,9 @@ def get_incoming_changes(working_dir: str, branch: str = None) -> dict:
             "buildmaster_files": buildmaster_files,
             "commit_count": len(commits),
             "file_count": len(files),
-            "branch": branch
+            "branch": branch,
+            "ahead": ahead,
+            "behind": behind
         }
         
     except Exception as e:
@@ -469,6 +493,162 @@ def check_buildmaster_repo_status(files: list) -> dict:
             "file_mapping": file_mapping,
             "should_push_instead": has_local_changes or len(unpushed_commits) > 0
         }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def get_local_changes_detailed(working_dir: str) -> dict:
+    """Get detailed list of local changes (modified, added, deleted files)"""
+    try:
+        # Get status with file details
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if status_result.returncode != 0:
+            return {"success": False, "error": f"Git status failed: {status_result.stderr}"}
+        
+        files = []
+        for line in status_result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            status_code = line[:2].strip()
+            file_path = line[3:].strip()
+            
+            # Determine file status
+            if status_code == "M" or status_code == "MM":
+                file_status = "modified"
+            elif status_code == "A" or status_code == "AM":
+                file_status = "added"
+            elif status_code == "D":
+                file_status = "deleted"
+            elif status_code == "??":
+                file_status = "untracked"
+            elif status_code == "R":
+                file_status = "renamed"
+            else:
+                file_status = "changed"
+            
+            files.append({
+                "path": file_path,
+                "status": file_status,
+                "code": status_code
+            })
+        
+        # Get unpushed commits
+        unpushed_result = subprocess.run(
+            ["git", "log", "@{u}..HEAD", "--oneline"],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        unpushed_commits = []
+        if unpushed_result.returncode == 0:
+            for line in unpushed_result.stdout.strip().split("\n"):
+                if line:
+                    parts = line.split(" ", 1)
+                    if len(parts) == 2:
+                        unpushed_commits.append({"hash": parts[0], "message": parts[1]})
+        
+        return {
+            "success": True,
+            "files": files,
+            "unpushed_commits": unpushed_commits,
+            "has_changes": len(files) > 0,
+            "has_unpushed": len(unpushed_commits) > 0
+        }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def reset_files(working_dir: str, files: list = None, reset_all: bool = False) -> dict:
+    """Reset specific files or all files to match remote"""
+    try:
+        if reset_all:
+            # Reset all tracked changes
+            result = subprocess.run(
+                ["git", "checkout", "--", "."],
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode != 0:
+                return {"success": False, "error": f"Reset failed: {result.stderr}"}
+            
+            # Clean untracked files
+            clean_result = subprocess.run(
+                ["git", "clean", "-fd"],
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            return {"success": True, "message": "All files reset to remote state"}
+        
+        elif files:
+            reset_files_list = []
+            for file_path in files:
+                result = subprocess.run(
+                    ["git", "checkout", "--", file_path],
+                    cwd=working_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    reset_files_list.append(file_path)
+            
+            return {"success": True, "message": f"Reset {len(reset_files_list)} file(s)", "files": reset_files_list}
+        
+        return {"success": False, "error": "No files specified"}
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def force_sync_to_remote(working_dir: str, branch: str = None) -> dict:
+    """Force sync local to match remote (discards all local changes and commits)"""
+    try:
+        # Fetch first
+        subprocess.run(["git", "fetch", "origin"], cwd=working_dir, capture_output=True, timeout=30)
+        
+        # Get branch
+        if not branch:
+            branch_result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "main"
+        
+        # Hard reset to origin
+        result = subprocess.run(
+            ["git", "reset", "--hard", f"origin/{branch}"],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            return {"success": False, "error": f"Reset failed: {result.stderr}"}
+        
+        # Clean untracked files
+        subprocess.run(["git", "clean", "-fd"], cwd=working_dir, capture_output=True, timeout=30)
+        
+        return {"success": True, "message": f"Synced to origin/{branch}", "branch": branch}
         
     except Exception as e:
         return {"success": False, "error": str(e)}

@@ -70,15 +70,16 @@ export default function BuildConfigTab({
             onChange={(e) => setSelectedScript(e.target.value)}
             className="w-full bg-slate-800 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20"
           >
-            {buildScriptsData?.scripts?.map((script: BuildScript) => (
+            {buildScriptsData?.scripts?.map((script: BuildScript & { description?: string }) => (
               <option key={script.name} value={script.name} className="bg-slate-800 text-white">
-                {script.name} {script.recommended ? '⭐' : ''} [{script.category}]
+                {script.name} {script.recommended ? '⭐' : ''}
               </option>
             ))}
           </select>
           {buildScriptsData?.scripts?.find((s: BuildScript) => s.name === selectedScript) && (
-            <p className="text-xs text-slate-400 mt-2 font-mono truncate">
-              {buildScriptsData.scripts.find((s: BuildScript) => s.name === selectedScript)?.command}
+            <p className="text-xs text-slate-400 mt-2">
+              {(buildScriptsData.scripts.find((s: BuildScript & { description?: string }) => s.name === selectedScript) as any)?.description || 
+               buildScriptsData.scripts.find((s: BuildScript) => s.name === selectedScript)?.command}
             </p>
           )}
         </div>

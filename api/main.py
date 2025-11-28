@@ -464,7 +464,7 @@ async def build_disk_usage_endpoint(
 async def build_scripts_endpoint(
     email: str = Depends(verify_session_token)
 ):
-    """Get available build scripts from dev package.json"""
+    """Get available build scripts from dev package.json - consolidated list"""
     try:
         import json
         package_json_path = Path(settings.DEV_DIR) / "package.json"
@@ -477,29 +477,28 @@ async def build_scripts_endpoint(
         
         all_scripts = package_data.get("scripts", {})
         
-        # Filter for build-related scripts
+        # Only show the main build scripts - consolidated list
+        main_build_scripts = {
+            "build:server": {"desc": "Production build (recommended)", "category": "production"},
+            "build:prod": {"desc": "Production build", "category": "production"},
+            "build:quick": {"desc": "Quick build (skip optimizations)", "category": "quick"},
+            "build:clean": {"desc": "Clean build (removes .next cache)", "category": "clean"},
+            "build": {"desc": "Standard Next.js build", "category": "standard"},
+        }
+        
         build_scripts = []
-        for name, command in all_scripts.items():
-            if any(keyword in name.lower() for keyword in ['build', 'compile', 'production']):
-                # Categorize the script
-                if 'server' in name.lower():
-                    category = 'server'
-                elif 'quick' in name.lower():
-                    category = 'quick'
-                elif 'production' in name.lower() or 'prod' in name.lower():
-                    category = 'production'
-                else:
-                    category = 'standard'
-                
+        for name, meta in main_build_scripts.items():
+            if name in all_scripts:
                 build_scripts.append({
                     "name": name,
-                    "command": command,
-                    "category": category,
-                    "recommended": name in ['build:server', 'build', 'build:server:quick']
+                    "command": all_scripts[name],
+                    "category": meta["category"],
+                    "description": meta["desc"],
+                    "recommended": name == "build:server"
                 })
         
-        # Sort: recommended first, then by category
-        build_scripts.sort(key=lambda x: (not x['recommended'], x['category'], x['name']))
+        # Sort: recommended first
+        build_scripts.sort(key=lambda x: (not x['recommended'], x['name']))
         
         return {
             "scripts": build_scripts,
@@ -804,6 +803,65 @@ async def pm2_restart_endpoint(
         app_name = "dintrafikskolax-dev" if env == "dev" else "dintrafikskolax-prod"
         result = await reload_pm2_app(app_name)
         return {"success": True, "message": f"Restarted {app_name}", "result": result}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/git/local-changes", response_model=dict)
+async def git_local_changes_endpoint(
+    env: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """Get detailed local changes for an environment"""
+    try:
+        from git_ops import get_local_changes_detailed
+        working_dir = settings.DEV_DIR if env == "dev" else settings.PROD_DIR
+        result = get_local_changes_detailed(working_dir)
+        result["env"] = env
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/git/reset-files", response_model=dict)
+async def git_reset_files_endpoint(
+    env: str = "dev",
+    files: list = None,
+    reset_all: bool = False,
+    email: str = Depends(verify_session_token)
+):
+    """Reset specific files or all files to match remote"""
+    try:
+        from git_ops import reset_files
+        working_dir = settings.DEV_DIR if env == "dev" else settings.PROD_DIR
+        result = reset_files(working_dir, files, reset_all)
+        result["env"] = env
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/git/force-sync", response_model=dict)
+async def git_force_sync_endpoint(
+    env: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """Force sync local to match remote (discards all local changes and commits)"""
+    try:
+        from git_ops import force_sync_to_remote
+        working_dir = settings.DEV_DIR if env == "dev" else settings.PROD_DIR
+        result = force_sync_to_remote(working_dir)
+        result["env"] = env
+        return result
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

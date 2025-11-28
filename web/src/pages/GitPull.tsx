@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import api from '../services/api'
-import { CheckCircle, XCircle, Loader, GitBranch, RefreshCw, GitCommit, AlertTriangle, Eye, Server } from 'lucide-react'
+import { CheckCircle, XCircle, Loader, GitBranch, RefreshCw, GitCommit, AlertTriangle, Eye, Server, Trash2, Archive } from 'lucide-react'
 import BuildDashboardUpdateDialog from '../components/BuildDashboardUpdateDialog'
 import SQLMigrationDialog from '../components/SQLMigrationDialog'
 
@@ -19,6 +19,9 @@ export default function GitPull() {
   const [showRestartConfirm, setShowRestartConfirm] = useState(false)
   const [showLocalChangesModal, setShowLocalChangesModal] = useState(false)
   const [localChangesFiles, setLocalChangesFiles] = useState<string[]>([])
+  const [showSyncModal, setShowSyncModal] = useState(false)
+  const [localFiles, setLocalFiles] = useState<string[]>([])
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set())
 
   // Fetch available branches
   const branchesQuery = useQuery({
@@ -62,6 +65,44 @@ export default function GitPull() {
       return response.data
     },
     onSuccess: (data) => setPreviewData(data)
+  })
+
+  // Get local changes mutation
+  const localChangesMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.get(`/git/local-changes?env=${selectedEnv}`)
+      return response.data
+    },
+    onSuccess: (data) => {
+      setLocalFiles(data.files || [])
+      setShowSyncModal(true)
+    }
+  })
+
+  // Force sync mutation
+  const forceSyncMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post(`/git/force-sync?env=${selectedEnv}`)
+      return response.data
+    },
+    onSuccess: (data) => {
+      setShowSyncModal(false)
+      setPullResult(data)
+      setPreviewData(null)
+      previewMutation.mutate() // Refresh preview
+    }
+  })
+
+  // Reset files mutation
+  const resetFilesMutation = useMutation({
+    mutationFn: async (params: { files?: string[]; resetAll?: boolean }) => {
+      const response = await api.post(`/git/reset-files?env=${selectedEnv}&reset_all=${params.resetAll || false}`, 
+        params.files ? { files: params.files } : {})
+      return response.data
+    },
+    onSuccess: () => {
+      localChangesMutation.mutate() // Refresh file list
+    }
   })
 
   // Set selected branch to current branch when data loads
@@ -220,8 +261,35 @@ export default function GitPull() {
               {previewData.error ? (
                 <div className="text-red-400">{previewData.error}</div>
               ) : !previewData.has_changes ? (
-                <div className="text-green-400 flex items-center gap-2">
-                  <CheckCircle size={16} /> Already up to date
+                <div className="space-y-3">
+                  <div className="text-green-400 flex items-center gap-2">
+                    <CheckCircle size={16} /> {previewData.message || 'Already up to date'}
+                  </div>
+                  {previewData.ahead > 0 && (
+                    <>
+                      <div className="text-amber-400 text-sm">
+                        Local has {previewData.ahead} unpushed commit(s) on branch <code className="bg-slate-800 px-1 rounded">{previewData.branch}</code>
+                      </div>
+                      <div className="flex gap-2 mt-3">
+                        <button
+                          onClick={() => localChangesMutation.mutate()}
+                          disabled={localChangesMutation.isPending}
+                          className="px-4 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded-lg border border-amber-500/30 flex items-center gap-2 text-sm"
+                        >
+                          {localChangesMutation.isPending ? <Loader className="animate-spin" size={14} /> : <Archive size={14} />}
+                          View Local Changes
+                        </button>
+                        <button
+                          onClick={() => forceSyncMutation.mutate()}
+                          disabled={forceSyncMutation.isPending}
+                          className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg border border-red-500/30 flex items-center gap-2 text-sm"
+                        >
+                          {forceSyncMutation.isPending ? <Loader className="animate-spin" size={14} /> : <Trash2 size={14} />}
+                          Force Sync to Remote
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -531,6 +599,97 @@ export default function GitPull() {
                 className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
               >
                 Discard & Pull
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sync Modal - View and manage local changes */}
+      {showSyncModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col">
+            <h4 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+              <Archive className="text-amber-400" size={20} />
+              Local Changes in {selectedEnv.toUpperCase()}
+            </h4>
+            
+            {localFiles.length === 0 ? (
+              <p className="text-slate-400 mb-4">No local file changes found.</p>
+            ) : (
+              <>
+                <p className="text-slate-400 mb-4 text-sm">
+                  {localFiles.length} file(s) with local changes. Select files to reset or reset all.
+                </p>
+                
+                <div className="flex-1 overflow-y-auto mb-4 border border-slate-700 rounded-lg">
+                  {localFiles.map((file: any, idx: number) => (
+                    <div 
+                      key={idx} 
+                      className="flex items-center gap-3 px-3 py-2 border-b border-slate-800 last:border-b-0 hover:bg-slate-800/50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedFiles.has(file.path)}
+                        onChange={(e) => {
+                          const newSet = new Set(selectedFiles)
+                          if (e.target.checked) {
+                            newSet.add(file.path)
+                          } else {
+                            newSet.delete(file.path)
+                          }
+                          setSelectedFiles(newSet)
+                        }}
+                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-amber-500"
+                      />
+                      <span className={`text-xs px-2 py-0.5 rounded ${
+                        file.status === 'modified' ? 'bg-yellow-500/20 text-yellow-400' :
+                        file.status === 'added' ? 'bg-green-500/20 text-green-400' :
+                        file.status === 'deleted' ? 'bg-red-500/20 text-red-400' :
+                        file.status === 'untracked' ? 'bg-purple-500/20 text-purple-400' :
+                        'bg-slate-500/20 text-slate-400'
+                      }`}>
+                        {file.status}
+                      </span>
+                      <span className="text-sm text-slate-300 font-mono truncate flex-1">{file.path}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => { setShowSyncModal(false); setSelectedFiles(new Set()); }}
+                className="px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600"
+              >
+                Close
+              </button>
+              {selectedFiles.size > 0 && (
+                <button
+                  onClick={() => resetFilesMutation.mutate({ files: Array.from(selectedFiles) })}
+                  disabled={resetFilesMutation.isPending}
+                  className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 flex items-center gap-2"
+                >
+                  {resetFilesMutation.isPending ? <Loader className="animate-spin" size={14} /> : null}
+                  Reset Selected ({selectedFiles.size})
+                </button>
+              )}
+              <button
+                onClick={() => resetFilesMutation.mutate({ resetAll: true })}
+                disabled={resetFilesMutation.isPending}
+                className="px-4 py-2 bg-red-500/80 text-white rounded-lg hover:bg-red-600 flex items-center gap-2"
+              >
+                <Trash2 size={14} />
+                Reset All Files
+              </button>
+              <button
+                onClick={() => forceSyncMutation.mutate()}
+                disabled={forceSyncMutation.isPending}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2"
+              >
+                {forceSyncMutation.isPending ? <Loader className="animate-spin" size={14} /> : <Trash2 size={14} />}
+                Force Sync (Reset All + Commits)
               </button>
             </div>
           </div>
