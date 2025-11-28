@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import api from '../services/api'
-import { CheckCircle, XCircle, Loader, GitBranch, RefreshCw, GitCommit } from 'lucide-react'
+import { CheckCircle, XCircle, Loader, GitBranch, RefreshCw, GitCommit, AlertTriangle, Eye, Server } from 'lucide-react'
 import BuildDashboardUpdateDialog from '../components/BuildDashboardUpdateDialog'
 import SQLMigrationDialog from '../components/SQLMigrationDialog'
 
 export default function GitPull() {
-  const [stashChanges, setStashChanges] = useState(true)
+  const [selectedEnv, setSelectedEnv] = useState<'dev' | 'prod'>('dev')
+  const [stashChanges, setStashChanges] = useState(false)
   const [force, setForce] = useState(false)
   const [selectedBranch, setSelectedBranch] = useState('')
   const [useCommit, setUseCommit] = useState(false)
@@ -14,6 +15,10 @@ export default function GitPull() {
   const [showBuildDashboardDialog, setShowBuildDashboardDialog] = useState(false)
   const [showSQLDialog, setShowSQLDialog] = useState(false)
   const [pullResult, setPullResult] = useState<any>(null)
+  const [previewData, setPreviewData] = useState<any>(null)
+  const [showRestartConfirm, setShowRestartConfirm] = useState(false)
+  const [showLocalChangesModal, setShowLocalChangesModal] = useState(false)
+  const [localChangesFiles, setLocalChangesFiles] = useState<string[]>([])
 
   // Fetch available branches
   const branchesQuery = useQuery({
@@ -28,22 +33,35 @@ export default function GitPull() {
     },
   })
 
-  // Fetch git status
+  // Fetch git status for selected env
   const statusQuery = useQuery({
-    queryKey: ['git-status'],
+    queryKey: ['git-status', selectedEnv],
     queryFn: async () => {
-      const response = await api.get('/git/status/detailed')
+      const response = await api.get(`/git/status?env=${selectedEnv}`)
       return response.data
     },
-    refetchInterval: 5000, // Refresh every 5 seconds
+    refetchInterval: 5000,
   })
 
-  // Restart dev server mutation
-  const restartDevMutation = useMutation({
+  // Restart server mutation
+  const restartMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.post('/pm2/dev/reload')
+      const response = await api.post(`/pm2/restart?env=${selectedEnv}`)
       return response.data
     },
+    onSuccess: () => {
+      setShowRestartConfirm(false)
+      setPullResult((prev: any) => prev ? { ...prev, restarted: true } : null)
+    }
+  })
+
+  // Preview changes mutation
+  const previewMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.get(`/git/preview-pull?env=${selectedEnv}`)
+      return response.data
+    },
+    onSuccess: (data) => setPreviewData(data)
   })
 
   // Set selected branch to current branch when data loads
@@ -53,47 +71,47 @@ export default function GitPull() {
     }
   }, [branchesQuery.data, selectedBranch])
 
-  const pullMutation = useMutation<
-    {
-      success: boolean
-      message: string
-      changes?: string[]
-      conflicts?: string[]
-      sql_migrations?: string[]
-      build_dashboard_changes?: string[]
-      should_reload?: boolean
-    },
-    Error,
-    { stash_changes: boolean; force: boolean; branch?: string }
-  >({
-    mutationFn: async (data: { stash_changes: boolean; force: boolean; branch?: string }) => {
-      const response = await api.post('/git/pull', data)
+  // Pull mutation using new endpoint
+  const pullMutation = useMutation({
+    mutationFn: async (options: { stash?: boolean; force?: boolean }) => {
+      const response = await api.post(`/git/pull-env?env=${selectedEnv}&stash=${options.stash || false}&force=${options.force || false}`)
       return response.data
     },
     onSuccess: (data) => {
       setPullResult(data)
+      setPreviewData(null)
+      
+      // Check for local changes - show modal
+      if (!data.success && data.has_local_changes) {
+        setLocalChangesFiles(data.files || [])
+        setShowLocalChangesModal(true)
+        return
+      }
       
       // Check for SQL migrations first
       if (data.sql_migrations && data.sql_migrations.length > 0) {
         setShowSQLDialog(true)
       }
-      // Then check for build dashboard changes after SQL is handled
+      // Then check for build dashboard changes
       else if (data.build_dashboard_changes && data.build_dashboard_changes.length > 0) {
         setShowBuildDashboardDialog(true)
       }
-      // Otherwise just restart dev if changes exist
-      else if (data.should_reload) {
-        setTimeout(() => restartDevMutation.mutate(), 2000)
+      // Show restart confirmation (NO auto-restart)
+      else if (data.success && !data.already_up_to_date) {
+        setShowRestartConfirm(true)
       }
     }
   })
 
-  const handlePull = () => {
-    pullMutation.mutate({ 
-      stash_changes: stashChanges, 
-      force,
-      branch: selectedBranch || undefined
-    })
+  const handlePreview = () => {
+    setPreviewData(null)
+    setPullResult(null)
+    previewMutation.mutate()
+  }
+
+  const handlePull = (stash = false, forceDelete = false) => {
+    setShowLocalChangesModal(false)
+    pullMutation.mutate({ stash, force: forceDelete })
   }
 
   // Handle SQL dialog close
@@ -104,14 +122,14 @@ export default function GitPull() {
     if (pullResult?.build_dashboard_changes && pullResult.build_dashboard_changes.length > 0) {
       setShowBuildDashboardDialog(true)
     }
-    // Otherwise just restart dev
-    else if (pullResult?.should_reload) {
-      setTimeout(() => restartDevMutation.mutate(), 1000)
+    // Show restart confirmation (NO auto-restart)
+    else if (pullResult?.success && !pullResult?.already_up_to_date) {
+      setShowRestartConfirm(true)
     }
   }
 
-  const handleRestartDev = () => {
-    restartDevMutation.mutate()
+  const handleRestart = () => {
+    restartMutation.mutate()
   }
 
   return (
@@ -120,44 +138,140 @@ export default function GitPull() {
         <div className="glass rounded-2xl p-8">
           <h1 className="text-3xl font-bold text-white mb-6">Git Pull</h1>
 
-          {/* Quick Actions */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          {/* Environment Selector */}
+          <div className="glass-subtle rounded-xl p-4 mb-6">
+            <label className="block text-sm text-slate-400 mb-3">Select Environment</label>
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setSelectedEnv('dev'); setPreviewData(null); setPullResult(null); }}
+                className={`flex-1 py-3 px-4 rounded-xl font-semibold transition-all flex items-center justify-center gap-2 ${
+                  selectedEnv === 'dev' 
+                    ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/30' 
+                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                }`}
+              >
+                <Server size={18} />
+                Development
+              </button>
+              <button
+                onClick={() => { setSelectedEnv('prod'); setPreviewData(null); setPullResult(null); }}
+                className={`flex-1 py-3 px-4 rounded-xl font-semibold transition-all flex items-center justify-center gap-2 ${
+                  selectedEnv === 'prod' 
+                    ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30' 
+                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                }`}
+              >
+                <Server size={18} />
+                Production
+              </button>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <button
-              onClick={handlePull}
-              disabled={pullMutation.isPending}
-              className="py-3 bg-sky-500 hover:bg-sky-600 text-white font-semibold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              onClick={handlePreview}
+              disabled={previewMutation.isPending}
+              className="py-3 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 font-semibold rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 border border-blue-500/30"
             >
-              {pullMutation.isPending ? (
-                <>
-                  <Loader className="animate-spin" size={20} />
-                  Pulling...
-                </>
+              {previewMutation.isPending ? (
+                <><Loader className="animate-spin" size={20} /> Checking...</>
               ) : (
-                <>
-                  <GitBranch size={20} />
-                  Pull from Git
-                </>
+                <><Eye size={20} /> Preview Changes</>
               )}
             </button>
 
             <button
-              onClick={handleRestartDev}
-              disabled={restartDevMutation.isPending}
-              className="py-3 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              onClick={() => handlePull()}
+              disabled={pullMutation.isPending}
+              className={`py-3 font-semibold rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 ${
+                selectedEnv === 'prod' 
+                  ? 'bg-emerald-500 hover:bg-emerald-600 text-white' 
+                  : 'bg-sky-500 hover:bg-sky-600 text-white'
+              }`}
             >
-              {restartDevMutation.isPending ? (
-                <>
-                  <Loader className="animate-spin" size={20} />
-                  Restarting...
-                </>
+              {pullMutation.isPending ? (
+                <><Loader className="animate-spin" size={20} /> Pulling...</>
               ) : (
-                <>
-                  <RefreshCw size={20} />
-                  Restart Dev Server
-                </>
+                <><GitBranch size={20} /> Pull {selectedEnv.toUpperCase()}</>
+              )}
+            </button>
+
+            <button
+              onClick={handleRestart}
+              disabled={restartMutation.isPending}
+              className="py-3 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 font-semibold rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 border border-amber-500/30"
+            >
+              {restartMutation.isPending ? (
+                <><Loader className="animate-spin" size={20} /> Restarting...</>
+              ) : (
+                <><RefreshCw size={20} /> Restart {selectedEnv.toUpperCase()}</>
               )}
             </button>
           </div>
+
+          {/* Preview Results */}
+          {previewData && (
+            <div className="glass-subtle rounded-xl p-6 mb-6 border border-blue-500/30">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                <Eye size={20} className="text-blue-400" /> 
+                Incoming Changes for {selectedEnv.toUpperCase()}
+              </h3>
+              {previewData.error ? (
+                <div className="text-red-400">{previewData.error}</div>
+              ) : !previewData.has_changes ? (
+                <div className="text-green-400 flex items-center gap-2">
+                  <CheckCircle size={16} /> Already up to date
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="text-slate-300">
+                    <span className="text-cyan-400 font-bold">{previewData.commit_count}</span> commit(s), 
+                    <span className="text-cyan-400 font-bold"> {previewData.file_count}</span> file(s)
+                  </div>
+                  {previewData.commits?.slice(0, 5).map((commit: any, idx: number) => (
+                    <div key={idx} className="flex items-start gap-2 text-sm">
+                      <code className="text-cyan-400 font-mono">{commit.hash}</code>
+                      <span className="text-slate-400">{commit.message}</span>
+                    </div>
+                  ))}
+                  {previewData.buildmaster_files?.length > 0 && (
+                    <div className="mt-3 p-3 bg-amber-500/10 rounded-lg border border-amber-500/30">
+                      <div className="text-amber-400 font-medium flex items-center gap-2">
+                        <AlertTriangle size={16} /> BuildMaster code detected
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Pull Result */}
+          {pullResult && (
+            <div className={`glass-subtle rounded-xl p-6 mb-6 border ${
+              pullResult.success ? 'border-green-500/30' : 'border-red-500/30'
+            }`}>
+              <div className={`flex items-center gap-2 text-lg font-semibold mb-2 ${
+                pullResult.success ? 'text-green-400' : 'text-red-400'
+              }`}>
+                {pullResult.success ? <CheckCircle size={20} /> : <XCircle size={20} />}
+                {pullResult.success ? 'Pull Successful' : 'Pull Failed'}
+              </div>
+              <p className="text-slate-300">{pullResult.message || pullResult.error}</p>
+              {pullResult.changed_files?.length > 0 && (
+                <div className="mt-3 text-sm text-slate-400">
+                  Changed: {pullResult.changed_files.slice(0, 5).join(', ')}
+                  {pullResult.changed_files.length > 5 && ` (+${pullResult.changed_files.length - 5} more)`}
+                </div>
+              )}
+              {pullResult.restarted && (
+                <div className="mt-3 text-green-400 flex items-center gap-2">
+                  <CheckCircle size={16} /> Server restarted
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Git Status */}
           <div className="glass-subtle rounded-xl p-6 mb-6">
@@ -341,88 +455,87 @@ export default function GitPull() {
               </div>
             </div>
 
-            {pullMutation.isSuccess && (
-              <div className="glass-subtle rounded-xl p-6 border border-green-500/50">
-                <div className="flex items-start gap-3">
-                  <CheckCircle className="text-green-400 mt-0.5" size={20} />
-                  <div className="flex-1">
-                    <h3 className="text-green-400 font-semibold mb-2">Pull Successful</h3>
-                    <p className="text-slate-300 text-sm">{pullMutation.data.message}</p>
-                    {pullMutation.data.changes && pullMutation.data.changes.length > 0 && (
-                      <div className="mt-3">
-                        <p className="text-slate-400 text-sm mb-2">Changes:</p>
-                        <ul className="list-disc list-inside text-slate-300 text-sm space-y-1">
-                          {pullMutation.data.changes.map((change: string, idx: number) => (
-                            <li key={idx}>{change}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    <div className="mt-3 p-2 bg-sky-500/10 rounded-lg border border-sky-500/30">
-                      <div className="flex items-center gap-2 text-sky-400 text-sm">
-                        <RefreshCw className="animate-spin" size={16} />
-                        <span>Dev server will restart automatically in 2 seconds...</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {pullMutation.isError && (
-              <div className="glass-subtle rounded-xl p-6 border border-rose-500/50">
-                <div className="flex items-start gap-3">
-                  <XCircle className="text-rose-400 mt-0.5" size={20} />
-                  <div className="flex-1">
-                    <h3 className="text-rose-400 font-semibold mb-2">Pull Failed</h3>
-                    <p className="text-slate-300 text-sm">
-                      {(pullMutation.error as any)?.response?.data?.message || 'An error occurred'}
-                    </p>
-                    {((pullMutation.error as any)?.response?.data?.conflicts || []).length > 0 && (
-                      <div className="mt-3">
-                        <p className="text-slate-400 text-sm mb-2">Conflicts detected:</p>
-                        <ul className="list-disc list-inside text-slate-300 text-sm space-y-1">
-                          {((pullMutation.error as any)?.response?.data?.conflicts || []).map((conflict: string, idx: number) => (
-                            <li key={idx}>{conflict}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {restartDevMutation.isSuccess && (
-              <div className="glass-subtle rounded-xl p-6 border border-green-500/50">
-                <div className="flex items-start gap-3">
-                  <CheckCircle className="text-green-400 mt-0.5" size={20} />
-                  <div className="flex-1">
-                    <h3 className="text-green-400 font-semibold mb-2">Dev Server Restarted</h3>
-                    <p className="text-slate-300 text-sm">{restartDevMutation.data.message || 'Development server has been restarted successfully'}</p>
-                    <p className="text-slate-400 text-xs mt-2">You can now test your uploaded changes.</p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {restartDevMutation.isError && (
-              <div className="glass-subtle rounded-xl p-6 border border-rose-500/50">
-                <div className="flex items-start gap-3">
-                  <XCircle className="text-rose-400 mt-0.5" size={20} />
-                  <div className="flex-1">
-                    <h3 className="text-rose-400 font-semibold mb-2">Restart Failed</h3>
-                    <p className="text-slate-300 text-sm">
-                      {(restartDevMutation.error as any)?.response?.data?.message || 'Failed to restart development server'}
-                    </p>
-                    <p className="text-slate-400 text-xs mt-2">Please check the server logs and try again.</p>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </div>
+
+      {/* Restart Confirmation Modal */}
+      {showRestartConfirm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full mx-4">
+            <h4 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+              <RefreshCw className="text-amber-400" size={20} />
+              Restart Server?
+            </h4>
+            <p className="text-slate-400 mb-6">
+              Changes have been pulled successfully. Do you want to restart the {selectedEnv === 'dev' ? 'development' : 'production'} server now?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowRestartConfirm(false)}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600"
+              >
+                Not Now
+              </button>
+              <button
+                onClick={handleRestart}
+                disabled={restartMutation.isPending}
+                className="flex-1 px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 flex items-center justify-center gap-2"
+              >
+                {restartMutation.isPending ? <Loader className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+                Restart
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Local Changes Warning Modal */}
+      {showLocalChangesModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full mx-4">
+            <h4 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+              <AlertTriangle className="text-yellow-400" size={20} />
+              Local Changes Detected
+            </h4>
+            <p className="text-slate-400 mb-4">
+              The {selectedEnv} environment has uncommitted changes that may be overwritten.
+            </p>
+            {localChangesFiles.length > 0 && (
+              <div className="p-3 bg-black/30 rounded-lg mb-4 max-h-32 overflow-y-auto">
+                <div className="text-xs text-slate-500 font-mono space-y-1">
+                  {localChangesFiles.slice(0, 10).map((file, idx) => (
+                    <div key={idx}>{file}</div>
+                  ))}
+                  {localChangesFiles.length > 10 && (
+                    <div className="text-slate-600">+{localChangesFiles.length - 10} more files</div>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => setShowLocalChangesModal(false)}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handlePull(true, false)}
+                className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+              >
+                Stash & Pull
+              </button>
+              <button
+                onClick={() => handlePull(false, true)}
+                className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+              >
+                Discard & Pull
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* SQL Migration Dialog */}
       {pullResult?.sql_migrations && (
