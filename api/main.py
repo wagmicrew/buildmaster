@@ -477,12 +477,14 @@ async def build_scripts_endpoint(
         
         all_scripts = package_data.get("scripts", {})
         
-        # Only show the main build scripts - consolidated list
+        # Only show the main build scripts - consolidated list with V24 optimizations
         main_build_scripts = {
-            "build:server": {"desc": "Production build (recommended)", "category": "production"},
-            "build:prod": {"desc": "Production build", "category": "production"},
-            "build:quick": {"desc": "Quick build (skip optimizations)", "category": "quick"},
-            "build:clean": {"desc": "Clean build (removes .next cache)", "category": "clean"},
+            "build:server": {"desc": "Production build with PM2, Redis, Nginx (recommended)", "category": "production"},
+            "build:prod": {"desc": "Production build (same as build:server)", "category": "production"},
+            "build:quick": {"desc": "Quick build - skip PM2, Redis, deps install", "category": "quick"},
+            "build:clean": {"desc": "Clean build - removes .next cache before building", "category": "clean"},
+            "build:phased": {"desc": "Phased build - memory-safe for large projects", "category": "phased"},
+            "build:phased:prod": {"desc": "Phased production build with monitoring", "category": "phased"},
             "build": {"desc": "Standard Next.js build", "category": "standard"},
         }
         

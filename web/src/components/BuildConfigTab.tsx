@@ -10,6 +10,62 @@ interface BuildScript {
   recommended: boolean
 }
 
+// Helper function to get build settings based on script
+function getBuildSettings(scriptName: string) {
+  switch (scriptName) {
+    case 'build:quick':
+      return {
+        skipDeps: false,
+        forceClean: false,
+        testDatabase: false,
+        testRedis: false,
+        skipPM2: true,
+        skipRedis: true,
+        memoryMonitoring: false
+      }
+    case 'build:clean':
+      return {
+        skipDeps: false,
+        forceClean: true,
+        testDatabase: true,
+        testRedis: true,
+        skipPM2: false,
+        skipRedis: false,
+        memoryMonitoring: false
+      }
+    case 'build:phased':
+      return {
+        skipDeps: false,
+        forceClean: false,
+        testDatabase: false,
+        testRedis: false,
+        skipPM2: false,
+        skipRedis: false,
+        memoryMonitoring: true
+      }
+    case 'build:phased:prod':
+      return {
+        skipDeps: false,
+        forceClean: false,
+        testDatabase: true,
+        testRedis: true,
+        skipPM2: false,
+        skipRedis: false,
+        memoryMonitoring: true
+      }
+    default: // build:server, build:prod, build
+      return {
+        skipDeps: false,
+        forceClean: false,
+        testDatabase: true,
+        testRedis: true,
+        skipPM2: false,
+        skipRedis: false,
+        memoryMonitoring: false
+      }
+  }
+}
+
 export default function BuildConfigTab({ 
   config, 
   onChange, 
@@ -37,6 +93,11 @@ export default function BuildConfigTab({
       setSelectedScript(buildScriptsData.default)
     }
   }, [buildScriptsData])
+  
+  // Update build_script in config when selection changes
+  useEffect(() => {
+    onChange({ ...config, build_script: selectedScript })
+  }, [selectedScript, config, onChange])
   
   // Check for active builds
   const { data: activeBuildCheck } = useQuery({
@@ -70,9 +131,9 @@ export default function BuildConfigTab({
             onChange={(e) => setSelectedScript(e.target.value)}
             className="w-full bg-slate-800 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20"
           >
-            {buildScriptsData?.scripts?.map((script: BuildScript & { description?: string }) => (
+            {buildScriptsData?.scripts?.map((script: BuildScript & { description?: string, category?: string }) => (
               <option key={script.name} value={script.name} className="bg-slate-800 text-white">
-                {script.name} {script.recommended ? '⭐' : ''}
+                {script.name} [{script.category}] {script.recommended ? '⭐' : ''}
               </option>
             ))}
           </select>
@@ -84,6 +145,32 @@ export default function BuildConfigTab({
           )}
         </div>
 
+        {/* Build Settings Preview */}
+        {buildScriptsData?.scripts?.find((s: BuildScript) => s.name === selectedScript) && (
+          <div className="bg-gradient-to-br from-blue-500/10 to-cyan-500/10 rounded-xl p-4 border border-blue-500/30">
+            <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+              <Settings size={16} className="text-blue-400" />
+              Build Settings for {selectedScript}
+            </h3>
+            <div className="text-xs text-slate-400 space-y-1">
+              {(() => {
+                const settings = getBuildSettings(selectedScript);
+                return (
+                  <>
+                    <p>• Skip Dependencies: {settings.skipDeps ? 'Yes' : 'No'}</p>
+                    <p>• Force Clean Cache: {settings.forceClean ? 'Yes' : 'No'}</p>
+                    <p>• Test Database: {settings.testDatabase ? 'Yes' : 'No'}</p>
+                    <p>• Test Redis: {settings.testRedis ? 'Yes' : 'No'}</p>
+                    <p>• Skip PM2: {settings.skipPM2 ? 'Yes' : 'No'}</p>
+                    <p>• Skip Redis: {settings.skipRedis ? 'Yes' : 'No'}</p>
+                    <p>• Memory Monitoring: {settings.memoryMonitoring ? 'Yes' : 'No'}</p>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
         {/* Build Mode */}
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -94,8 +181,9 @@ export default function BuildConfigTab({
             onChange={(e) => onChange({ ...config, build_mode: e.target.value })}
             className="w-full bg-slate-800 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20"
           >
-            <option value="quick" className="bg-slate-800 text-white">Quick Build</option>
-            <option value="full" className="bg-slate-800 text-white">Full Build</option>
+            <option value="quick" className="bg-slate-800 text-white">Quick Build (skip PM2, Redis)</option>
+            <option value="full" className="bg-slate-800 text-white">Full Build (with PM2, Redis)</option>
+            <option value="phased" className="bg-slate-800 text-white">Phased Build (memory-safe)</option>
             <option value="ram-optimized" className="bg-slate-800 text-white">RAM Optimized</option>
           </select>
         </div>

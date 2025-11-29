@@ -344,15 +344,41 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
         env = os.environ.copy()
         env["BUILD_ID"] = build_id
         
-        # Build mode: quick, full, auto
-        build_mode = config.build_mode if hasattr(config, 'build_mode') else "full"
-        env["BUILD_MODE"] = build_mode
+        # Get build script and determine settings
+        build_script = getattr(config, 'build_script', None) or "build:server"
         
-        # Skip dependencies installation
-        env["SKIP_DEPS"] = "true" if config.skip_deps else "false"
+        # Set build mode and environment based on script
+        if build_script == "build:quick":
+            build_mode = "quick"
+            env["BUILD_MODE"] = "quick"
+            env["SKIP_DEPS"] = "true"
+            env["SKIP_PM2"] = "true"
+            env["SKIP_REDIS"] = "true"
+        elif build_script == "build:clean":
+            build_mode = "full"
+            env["BUILD_MODE"] = "full"
+            env["FORCE_CLEAN"] = "true"
+        elif build_script == "build:phased":
+            build_mode = "phased"
+            env["BUILD_MODE"] = "phased"
+        elif build_script == "build:phased:prod":
+            build_mode = "phased"
+            env["BUILD_MODE"] = "phased"
+            env["SKIP_DEPS"] = "false"
+            env["TEST_DATABASE"] = "true"
+            env["TEST_REDIS"] = "true"
+        else:
+            # Default for build:server, build:prod, build
+            build_mode = config.build_mode if hasattr(config, 'build_mode') else "full"
+            env["BUILD_MODE"] = build_mode
+        
+        # Skip dependencies installation (only if not already set)
+        if "SKIP_DEPS" not in env:
+            env["SKIP_DEPS"] = "true" if config.skip_deps else "false"
         
         # Clear .next cache before build
-        env["CLEAR_CACHE"] = "true" if config.force_clean else "false"
+        if "FORCE_CLEAN" not in env:
+            env["FORCE_CLEAN"] = "false" if config.force_clean else "true"
         
         # Quick build (skip static generation)
         env["QUICK_BUILD"] = "true" if build_mode == "quick" else "false"
@@ -368,8 +394,7 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
         if workers and workers > 0:
             env["BUILD_WORKERS"] = str(workers)
         
-        # Get build script from config or use default
-        build_script = getattr(config, 'build_script', None) or "build:server"
+        # Build script is already determined above
         
         # Run the selected build script
         with open(log_path, "w", encoding='utf-8', errors='replace') as log_file:
@@ -379,8 +404,12 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
             log_file.write(f"[INFO] Build Script: pnpm run {build_script}\n")
             log_file.write(f"[INFO] Mode: {build_mode}\n")
             log_file.write(f"[INFO] Working Directory: {working_dir}\n")
-            log_file.write(f"[INFO] Skip Deps: {env['SKIP_DEPS']}\n")
-            log_file.write(f"[INFO] Clear Cache: {env['CLEAR_CACHE']}\n")
+            log_file.write(f"[INFO] Skip Deps: {env.get('SKIP_DEPS', 'false')}\n")
+            log_file.write(f"[INFO] Force Clean: {env.get('FORCE_CLEAN', 'false')}\n")
+            log_file.write(f"[INFO] Test Database: {env.get('TEST_DATABASE', 'false')}\n")
+            log_file.write(f"[INFO] Test Redis: {env.get('TEST_REDIS', 'false')}\n")
+            log_file.write(f"[INFO] Max Old Space: {env.get('MAX_OLD_SPACE', 'auto')}\n")
+            log_file.write(f"[INFO] Workers: {env.get('BUILD_WORKERS', 'auto')}\n")
             log_file.write(f"[BUILD] ================================\n\n")
             log_file.flush()
             
