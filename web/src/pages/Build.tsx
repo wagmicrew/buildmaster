@@ -23,7 +23,8 @@ export default function Build() {
     workers: 4, // Default to 4 workers for typical 4-core servers
     max_old_space_size: 8192, // Default to 8GB for full builds
     max_semi_space_size: 256, // Default to 256MB semi-space
-    build_mode: 'full' as 'quick' | 'full' | 'ram-optimized',
+    // Build mode maps directly to backend BuildMode enum values
+    build_mode: 'full' as 'quick' | 'full' | 'phased' | 'phased-prod' | 'clean' | 'ram-optimized',
     test_database: true,
     test_redis: true,
     skip_deps: false,

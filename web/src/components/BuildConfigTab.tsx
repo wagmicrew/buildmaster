@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Play, Loader, Settings, Zap, Activity, Rocket, AlertCircle } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import api from '../services/api'
@@ -467,7 +467,7 @@ export default function BuildConfigTab({
 
         {/* Start Build Button */}
         <button
-          onClick={() => startBuildMutation.mutate({ ...config, build_type: buildType, build_script: selectedScript })}
+          onClick={() => startBuildMutation.mutate({ ...config, build_type: buildType })}
           disabled={startBuildMutation.isPending || activeBuildCheck?.has_active_build}
           className="w-full py-4 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-all flex items-center justify-center gap-3 shadow-lg"
         >
@@ -485,7 +485,9 @@ export default function BuildConfigTab({
             <>
               {buildType === 'production' ? <Rocket size={20} /> : <Play size={20} />}
               Start {buildType === 'production' ? 'Production' : 'Development'} Build
-              <span className="text-xs opacity-75">({selectedScript})</span>
+              <span className="text-xs opacity-75">
+                ({getBuildSettings(config.build_mode).buildScript})
+              </span>
             </>
           )}
         </button>
