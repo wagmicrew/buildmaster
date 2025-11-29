@@ -24,6 +24,12 @@ from system_metrics import clear_workers
 _build_storage: Dict[str, Dict] = {}
 _running_processes: Dict[str, asyncio.subprocess.Process] = {}
 
+# Build timeout and sanity check constants
+BUILD_TIMEOUT_SECONDS = 1800  # 30 minutes max build time
+BUILD_STALL_TIMEOUT_SECONDS = 600  # 10 minutes no output = stalled
+BUILD_SANITY_CHECK_INTERVAL = 30  # Check every 30 seconds
+MAX_BUILD_SIZE_MB = 2048  # Warn if .next exceeds 2GB
+
 # Build step weights for progress calculation
 BUILD_STEPS = {
     0: {'name': 'Kill zombies', 'weight': 2},
@@ -430,10 +436,12 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
             # Store process for kill functionality
             _running_processes[build_id] = process
             
-            # Monitor process with heartbeat
+            # Monitor process with heartbeat and sanity checks
+            build_start_time = datetime.utcnow()
             last_output_time = datetime.utcnow()
             last_output_size = 0
             last_step = 0
+            last_sanity_check = datetime.utcnow()
             
             while True:
                 await asyncio.sleep(5)  # Check every 5 seconds
@@ -441,6 +449,35 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
                 # Check if process is done
                 if process.returncode is not None:
                     _running_processes.pop(build_id, None)
+                    break
+                
+                current_time = datetime.utcnow()
+                elapsed_seconds = (current_time - build_start_time).total_seconds()
+                
+                # SANITY CHECK 1: Hard timeout (30 minutes default)
+                if elapsed_seconds > BUILD_TIMEOUT_SECONDS:
+                    status_data = load_build_status(build_id)
+                    if status_data:
+                        status_data["status"] = BuildStatus.ERROR.value
+                        status_data["error_type"] = "TIMEOUT"
+                        status_data["message"] = f"Build exceeded maximum time limit ({BUILD_TIMEOUT_SECONDS // 60} minutes)"
+                        status_data["error"] = (
+                            f"Build timeout after {int(elapsed_seconds)} seconds.\n\n"
+                            f"Suggestions:\n"
+                            f"1. Use 'build:phased' for large projects\n"
+                            f"2. Increase memory with --max-old-space-size\n"
+                            f"3. Check for infinite loops in build scripts\n"
+                            f"4. Use 'build:quick' for faster iteration"
+                        )
+                        save_build_status(build_id, status_data)
+                    
+                    try:
+                        await send_build_stalled_email(build_id, f"Build timed out after {int(elapsed_seconds)} seconds")
+                    except:
+                        pass
+                    
+                    process.kill()
+                    print(f"[BUILD] Killed build {build_id} - exceeded {BUILD_TIMEOUT_SECONDS}s timeout")
                     break
                 
                 # Parse log for progress updates
@@ -463,18 +500,30 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
                                 status_data["current_step"] = f"STEP_{current_step}"
                                 status_data["progress"] = round(progress, 1)
                                 status_data["message"] = step_name
+                                status_data["elapsed_seconds"] = int(elapsed_seconds)
                                 save_build_status(build_id, status_data)
                         
-                        # Check for stalled build
+                        # SANITY CHECK 2: Stall detection (no output for 10 minutes)
                         if current_size != last_output_size:
                             last_output_size = current_size
                             last_output_time = datetime.utcnow()
-                        elif (datetime.utcnow() - last_output_time).total_seconds() > 600:
+                        elif (current_time - last_output_time).total_seconds() > BUILD_STALL_TIMEOUT_SECONDS:
                             # Build stalled - no output for 10 minutes
                             status_data = load_build_status(build_id)
                             if status_data:
                                 status_data["status"] = BuildStatus.STALLED.value
-                                status_data["message"] = "Build stalled - no output for 10 minutes"
+                                status_data["error_type"] = "STALLED"
+                                status_data["message"] = f"Build stalled - no output for {BUILD_STALL_TIMEOUT_SECONDS // 60} minutes"
+                                status_data["error"] = (
+                                    f"Build appears to be stuck.\n\n"
+                                    f"Last output was {int((current_time - last_output_time).total_seconds())} seconds ago.\n"
+                                    f"Total elapsed time: {int(elapsed_seconds)} seconds.\n\n"
+                                    f"Suggestions:\n"
+                                    f"1. Check memory usage - may be swapping\n"
+                                    f"2. Use 'build:phased' for memory-safe builds\n"
+                                    f"3. Reduce worker count\n"
+                                    f"4. Check for network issues if fetching packages"
+                                )
                                 save_build_status(build_id, status_data)
                             
                             try:
@@ -483,7 +532,42 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
                                 pass
                             
                             process.kill()
+                            print(f"[BUILD] Killed build {build_id} - stalled for {BUILD_STALL_TIMEOUT_SECONDS}s")
                             break
+                        
+                        # SANITY CHECK 3: Periodic health checks (every 30 seconds)
+                        if (current_time - last_sanity_check).total_seconds() > BUILD_SANITY_CHECK_INTERVAL:
+                            last_sanity_check = current_time
+                            
+                            # Check for memory errors in log
+                            if "heap out of memory" in content.lower() or "fatal error" in content.lower():
+                                status_data = load_build_status(build_id)
+                                if status_data:
+                                    status_data["status"] = BuildStatus.ERROR.value
+                                    status_data["error_type"] = "OUT_OF_MEMORY"
+                                    status_data["message"] = "Build crashed - out of memory"
+                                    status_data["error"] = (
+                                        f"Memory exhausted during build.\n\n"
+                                        f"Suggestions:\n"
+                                        f"1. Increase --max-old-space-size (current may be too low)\n"
+                                        f"2. Use 'build:phased' for memory-safe builds\n"
+                                        f"3. Reduce parallel workers\n"
+                                        f"4. Close other applications on the server"
+                                    )
+                                    save_build_status(build_id, status_data)
+                                
+                                process.kill()
+                                print(f"[BUILD] Killed build {build_id} - out of memory detected")
+                                break
+                            
+                            # Update elapsed time in status
+                            status_data = load_build_status(build_id)
+                            if status_data:
+                                status_data["elapsed_seconds"] = int(elapsed_seconds)
+                                # Add warning if build is taking too long
+                                if elapsed_seconds > 900:  # 15 minutes
+                                    status_data["warning"] = f"Build running for {int(elapsed_seconds // 60)} minutes"
+                                save_build_status(build_id, status_data)
                             
                     except Exception as e:
                         print(f"Error parsing log: {e}")

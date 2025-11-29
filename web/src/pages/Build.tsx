@@ -1,15 +1,16 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import api from '../services/api'
-import { Loader, CheckCircle, XCircle, Clock, AlertTriangle, Zap, Settings, History, Cpu, Square, Terminal, AlertTriangle as AlertTriangleIcon } from 'lucide-react'
+import { Loader, CheckCircle, XCircle, Clock, AlertTriangle, Zap, Settings, History, Cpu, Square, Terminal, AlertTriangle as AlertTriangleIcon, FileCode } from 'lucide-react'
 import BuildProgress from '../components/BuildProgress'
 import BuildConfigTab from '../components/BuildConfigTab'
 import BuildHistoryTab from '../components/BuildHistoryTab'
+import BuildScriptEditor from '../components/BuildScriptEditor'
 import SystemMetricsPanel from '../components/SystemMetricsPanel'
 import WorkerAccordion from '../components/WorkerAccordion'
 import ConsoleModal from '../components/ConsoleModal'
 
-type TabType = 'config' | 'history' | 'active' | 'logs'
+type TabType = 'config' | 'history' | 'active' | 'logs' | 'scripts'
 
 export default function Build() {
   const [activeTab, setActiveTab] = useState<TabType>('config')
@@ -84,6 +85,7 @@ export default function Build() {
 
   const tabs = [
     { id: 'config' as TabType, label: 'Configuration', icon: Settings },
+    { id: 'scripts' as TabType, label: 'Scripts', icon: FileCode },
     { id: 'history' as TabType, label: 'History', icon: History },
     { id: 'active' as TabType, label: 'Active Build', icon: Cpu },
     { id: 'logs' as TabType, label: 'Logs', icon: Clock },
@@ -268,6 +270,9 @@ export default function Build() {
               startBuildMutation={startBuildMutation}
             />
           )}
+
+          {/* Scripts Tab */}
+          {activeTab === 'scripts' && <BuildScriptEditor />}
 
           {/* History Tab */}
           {activeTab === 'history' && <BuildHistoryTab />}

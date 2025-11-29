@@ -527,6 +527,355 @@ async def build_scripts_endpoint(
         )
 
 
+@app.get("/api/build/scripts/all", response_model=dict)
+async def build_scripts_all_endpoint(
+    environment: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """Get all build scripts from package.json with full details"""
+    try:
+        import json
+        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        package_json_path = Path(project_dir) / "package.json"
+        
+        if not package_json_path.exists():
+            return {"scripts": [], "error": "package.json not found"}
+        
+        with open(package_json_path, "r") as f:
+            package_data = json.load(f)
+        
+        all_scripts = package_data.get("scripts", {})
+        
+        # Build script metadata
+        script_metadata = {
+            "build": {"desc": "Standard Next.js build", "category": "standard", "timeout": 1800},
+            "build:server": {"desc": "Production build with PM2, Redis, Nginx", "category": "production", "timeout": 1800, "recommended": True},
+            "build:prod": {"desc": "Production build (same as build:server)", "category": "production", "timeout": 1800},
+            "build:quick": {"desc": "Quick build - skip PM2, Redis, deps", "category": "quick", "timeout": 600},
+            "build:clean": {"desc": "Clean build - removes .next cache", "category": "clean", "timeout": 2400},
+            "build:phased": {"desc": "Phased build - memory-safe for large projects", "category": "phased", "timeout": 2400},
+            "build:phased:prod": {"desc": "Phased production build with monitoring", "category": "phased", "timeout": 3000},
+            "dev": {"desc": "Start development server", "category": "development", "timeout": 0},
+            "start": {"desc": "Start production server", "category": "production", "timeout": 0},
+            "lint": {"desc": "Run ESLint", "category": "quality", "timeout": 300},
+            "test": {"desc": "Run tests", "category": "quality", "timeout": 600},
+        }
+        
+        build_scripts = []
+        for name, command in all_scripts.items():
+            meta = script_metadata.get(name, {"desc": "", "category": "other", "timeout": 1800})
+            build_scripts.append({
+                "name": name,
+                "command": command,
+                "category": meta.get("category", "other"),
+                "description": meta.get("desc", ""),
+                "recommended": meta.get("recommended", False),
+                "timeout": meta.get("timeout", 1800),
+                "isCustom": False
+            })
+        
+        # Sort: recommended first, then by category
+        build_scripts.sort(key=lambda x: (not x['recommended'], x['category'], x['name']))
+        
+        return {
+            "scripts": build_scripts,
+            "default": "build:server",
+            "path": project_dir,
+            "environment": environment
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/build/scripts/custom", response_model=dict)
+async def build_scripts_custom_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Get custom build scripts stored in BuildMaster"""
+    try:
+        custom_scripts_file = Path(settings.BUILD_DATA_DIR) / "custom_scripts.json"
+        
+        if not custom_scripts_file.exists():
+            return {"scripts": []}
+        
+        with open(custom_scripts_file, "r") as f:
+            data = json.load(f)
+        
+        return {"scripts": data.get("scripts", [])}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/build/scripts/create", response_model=dict)
+async def build_scripts_create_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Create a new custom build script"""
+    try:
+        name = payload.get("name", "").strip()
+        command = payload.get("command", "").strip()
+        description = payload.get("description", "").strip()
+        
+        if not name or not command:
+            raise HTTPException(status_code=400, detail="Name and command are required")
+        
+        # Validate script name format
+        if not name.replace(":", "").replace("-", "").replace("_", "").isalnum():
+            raise HTTPException(status_code=400, detail="Invalid script name format")
+        
+        # Load existing custom scripts
+        custom_scripts_file = Path(settings.BUILD_DATA_DIR) / "custom_scripts.json"
+        custom_scripts_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        if custom_scripts_file.exists():
+            with open(custom_scripts_file, "r") as f:
+                data = json.load(f)
+        else:
+            data = {"scripts": []}
+        
+        # Check for duplicate
+        if any(s["name"] == name for s in data["scripts"]):
+            raise HTTPException(status_code=400, detail=f"Script '{name}' already exists")
+        
+        # Add new script
+        new_script = {
+            "name": name,
+            "command": command,
+            "description": description,
+            "category": "custom",
+            "isCustom": True,
+            "created_at": datetime.utcnow().isoformat(),
+            "created_by": email
+        }
+        data["scripts"].append(new_script)
+        
+        with open(custom_scripts_file, "w") as f:
+            json.dump(data, f, indent=2)
+        
+        return {"success": True, "script": new_script}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/build/scripts/save", response_model=dict)
+async def build_scripts_save_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Save/update a build script in package.json or custom scripts"""
+    try:
+        name = payload.get("name", "").strip()
+        command = payload.get("command", "").strip()
+        description = payload.get("description", "").strip()
+        environment = payload.get("environment", "dev")
+        
+        if not name or not command:
+            raise HTTPException(status_code=400, detail="Name and command are required")
+        
+        # Check if it's a custom script
+        custom_scripts_file = Path(settings.BUILD_DATA_DIR) / "custom_scripts.json"
+        is_custom = False
+        
+        if custom_scripts_file.exists():
+            with open(custom_scripts_file, "r") as f:
+                custom_data = json.load(f)
+            
+            for script in custom_data.get("scripts", []):
+                if script["name"] == name:
+                    is_custom = True
+                    script["command"] = command
+                    script["description"] = description
+                    script["updated_at"] = datetime.utcnow().isoformat()
+                    script["updated_by"] = email
+                    break
+            
+            if is_custom:
+                with open(custom_scripts_file, "w") as f:
+                    json.dump(custom_data, f, indent=2)
+                return {"success": True, "message": f"Custom script '{name}' updated"}
+        
+        # Update package.json
+        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        package_json_path = Path(project_dir) / "package.json"
+        
+        if not package_json_path.exists():
+            raise HTTPException(status_code=404, detail="package.json not found")
+        
+        with open(package_json_path, "r") as f:
+            package_data = json.load(f)
+        
+        if "scripts" not in package_data:
+            package_data["scripts"] = {}
+        
+        package_data["scripts"][name] = command
+        
+        with open(package_json_path, "w") as f:
+            json.dump(package_data, f, indent=2)
+        
+        return {"success": True, "message": f"Script '{name}' saved to package.json"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.delete("/api/build/scripts/{script_name}", response_model=dict)
+async def build_scripts_delete_endpoint(
+    script_name: str,
+    email: str = Depends(verify_session_token)
+):
+    """Delete a custom build script"""
+    try:
+        custom_scripts_file = Path(settings.BUILD_DATA_DIR) / "custom_scripts.json"
+        
+        if not custom_scripts_file.exists():
+            raise HTTPException(status_code=404, detail="Script not found")
+        
+        with open(custom_scripts_file, "r") as f:
+            data = json.load(f)
+        
+        original_count = len(data.get("scripts", []))
+        data["scripts"] = [s for s in data.get("scripts", []) if s["name"] != script_name]
+        
+        if len(data["scripts"]) == original_count:
+            raise HTTPException(status_code=404, detail="Script not found or cannot be deleted")
+        
+        with open(custom_scripts_file, "w") as f:
+            json.dump(data, f, indent=2)
+        
+        return {"success": True, "message": f"Script '{script_name}' deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/build/scripts/analyze", response_model=dict)
+async def build_scripts_analyze_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Analyze a build script and provide optimization suggestions"""
+    try:
+        command = payload.get("command", "").strip()
+        
+        if not command:
+            raise HTTPException(status_code=400, detail="Command is required")
+        
+        suggestions = []
+        estimated_time = "10-20 min"
+        memory_estimate = "4-8 GB"
+        risk_level = "low"
+        
+        # Analyze memory settings
+        if "max-old-space-size" not in command:
+            suggestions.append({
+                "type": "warning",
+                "title": "No memory limit set",
+                "description": "Build may crash on large projects without memory limits",
+                "fix": 'Add NODE_OPTIONS="--max-old-space-size=8192"',
+                "impact": "high"
+            })
+        else:
+            import re
+            mem_match = re.search(r'max-old-space-size=(\d+)', command)
+            if mem_match:
+                mem_size = int(mem_match.group(1))
+                memory_estimate = f"{mem_size // 1024} GB"
+                if mem_size < 4096:
+                    suggestions.append({
+                        "type": "warning",
+                        "title": "Low memory limit",
+                        "description": f"{mem_size}MB may not be enough for large builds",
+                        "fix": "Increase to at least 4096 or 8192",
+                        "impact": "medium"
+                    })
+        
+        # Check NODE_ENV
+        if "NODE_ENV=" not in command:
+            suggestions.append({
+                "type": "error",
+                "title": "NODE_ENV not set",
+                "description": "Build environment not specified",
+                "fix": "Add NODE_ENV=production or NODE_ENV=development",
+                "impact": "high"
+            })
+            risk_level = "medium"
+        
+        # Check for turbo
+        if "--turbo" in command:
+            suggestions.append({
+                "type": "warning",
+                "title": "Turbopack is experimental",
+                "description": "May have stability issues in production",
+                "impact": "medium"
+            })
+            risk_level = "medium"
+            estimated_time = "5-10 min"
+        
+        # Check for cache clearing
+        if "rimraf .next" in command or "rm -rf .next" in command:
+            suggestions.append({
+                "type": "info",
+                "title": "Cache will be cleared",
+                "description": "Build will take longer but ensures clean state",
+                "impact": "low"
+            })
+            estimated_time = "20-35 min"
+        
+        # Sanity checks
+        sanity_checks = [
+            {"name": "Memory Limit", "passed": "max-old-space-size" in command, "message": "Memory limit configured" if "max-old-space-size" in command else "No memory limit"},
+            {"name": "Environment", "passed": "NODE_ENV=" in command, "message": "NODE_ENV set" if "NODE_ENV=" in command else "NODE_ENV not set"},
+            {"name": "Timeout Protection", "passed": True, "message": "BuildMaster enforces 30-min timeout"},
+            {"name": "Loop Safety", "passed": "while true" not in command and "for (;;)" not in command, "message": "No dangerous loops detected"}
+        ]
+        
+        if not suggestions:
+            suggestions.append({
+                "type": "success",
+                "title": "Script looks good!",
+                "description": "No major issues detected",
+                "impact": "low"
+            })
+        
+        return {
+            "suggestions": suggestions,
+            "estimatedTime": estimated_time,
+            "memoryEstimate": memory_estimate,
+            "riskLevel": risk_level,
+            "sanityChecks": {
+                "passed": all(c["passed"] for c in sanity_checks),
+                "checks": sanity_checks
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
 # Deploy operations
 @app.post("/api/deploy/golive", response_model=dict)
 async def deploy_golive_endpoint(
