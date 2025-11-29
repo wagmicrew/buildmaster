@@ -344,33 +344,39 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
         env = os.environ.copy()
         env["BUILD_ID"] = build_id
         
-        # Get build script and determine settings
-        build_script = getattr(config, 'build_script', None) or "build:server"
+        # Determine build script based on build mode
+        build_mode = config.build_mode.value if hasattr(config.build_mode, 'value') else str(config.build_mode)
         
-        # Set build mode and environment based on script
-        if build_script == "build:quick":
-            build_mode = "quick"
+        # Map build mode to build script
+        build_script_map = {
+            "quick": "build:quick",
+            "full": "build:server",
+            "phased": "build:phased",
+            "phased-prod": "build:phased:prod",
+            "clean": "build:clean",
+            "ram-optimized": "build:server"
+        }
+        
+        build_script = build_script_map.get(build_mode, "build:server")
+        
+        # Set environment variables based on build mode
+        if build_mode == "quick":
             env["BUILD_MODE"] = "quick"
             env["SKIP_DEPS"] = "true"
             env["SKIP_PM2"] = "true"
             env["SKIP_REDIS"] = "true"
-        elif build_script == "build:clean":
-            build_mode = "full"
+        elif build_mode == "clean":
             env["BUILD_MODE"] = "full"
             env["FORCE_CLEAN"] = "true"
-        elif build_script == "build:phased":
-            build_mode = "phased"
+        elif build_mode == "phased":
             env["BUILD_MODE"] = "phased"
-        elif build_script == "build:phased:prod":
-            build_mode = "phased"
+        elif build_mode == "phased-prod":
             env["BUILD_MODE"] = "phased"
             env["SKIP_DEPS"] = "false"
             env["TEST_DATABASE"] = "true"
             env["TEST_REDIS"] = "true"
-        else:
-            # Default for build:server, build:prod, build
-            build_mode = config.build_mode if hasattr(config, 'build_mode') else "full"
-            env["BUILD_MODE"] = build_mode
+        else:  # full, ram-optimized
+            env["BUILD_MODE"] = "full"
         
         # Skip dependencies installation (only if not already set)
         if "SKIP_DEPS" not in env:
