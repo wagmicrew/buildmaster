@@ -106,6 +106,19 @@ from buildmaster_ops import (
     get_buildmaster_status,
     initialize_valid_emails
 )
+from db_service_ops import (
+    get_postgres_status,
+    get_redis_status as get_redis_service_status,
+    start_postgres,
+    stop_postgres,
+    restart_postgres,
+    start_redis,
+    stop_redis,
+    restart_redis,
+    run_postgres_maintenance,
+    get_postgres_connections,
+    get_all_services_status
+)
 
 # Create FastAPI app
 app = FastAPI(
@@ -621,6 +634,161 @@ async def health_environment_endpoint(
     try:
         health = await get_environment_health()
         return health.dict()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+# Database service management endpoints
+@app.get("/api/services/status", response_model=dict)
+async def services_status_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Get status of all database-related services"""
+    try:
+        return await get_all_services_status()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/services/postgres/status", response_model=dict)
+async def postgres_status_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Get PostgreSQL service status"""
+    try:
+        return await get_postgres_status()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/services/postgres/start", response_model=dict)
+async def postgres_start_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Start PostgreSQL service"""
+    try:
+        return await start_postgres()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/services/postgres/stop", response_model=dict)
+async def postgres_stop_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Stop PostgreSQL service"""
+    try:
+        return await stop_postgres()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/services/postgres/restart", response_model=dict)
+async def postgres_restart_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Restart PostgreSQL service"""
+    try:
+        return await restart_postgres()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/services/postgres/maintenance", response_model=dict)
+async def postgres_maintenance_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Run PostgreSQL maintenance (VACUUM ANALYZE)"""
+    try:
+        return await run_postgres_maintenance()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/services/postgres/connections", response_model=dict)
+async def postgres_connections_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Get current PostgreSQL connections"""
+    try:
+        return await get_postgres_connections()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/services/redis/status", response_model=dict)
+async def redis_service_status_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Get Redis service status"""
+    try:
+        return await get_redis_service_status()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/services/redis/start", response_model=dict)
+async def redis_start_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Start Redis service"""
+    try:
+        return await start_redis()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/services/redis/stop", response_model=dict)
+async def redis_stop_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Stop Redis service"""
+    try:
+        return await stop_redis()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/services/redis/restart", response_model=dict)
+async def redis_restart_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Restart Redis service"""
+    try:
+        return await restart_redis()
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

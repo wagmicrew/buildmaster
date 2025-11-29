@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../services/api'
-import { Activity, Database, Server, CheckCircle, XCircle, Loader } from 'lucide-react'
+import { Activity, Database, Server, CheckCircle, XCircle, Loader, Play, Square, RefreshCw, Wrench } from 'lucide-react'
 
 export default function Health() {
+  const queryClient = useQueryClient()
   const [_gitActionFeedback, setGitActionFeedback] = useState<{
     action: string
     status: 'loading' | 'success' | 'error'
@@ -11,6 +12,163 @@ export default function Health() {
   } | null>(null)
   const [_showCleanConfirm, setShowCleanConfirm] = useState(false)
   const [_filesToClean, setFilesToClean] = useState<string[]>([])
+  const [serviceFeedback, setServiceFeedback] = useState<{
+    service: string
+    action: string
+    status: 'loading' | 'success' | 'error'
+    message: string
+  } | null>(null)
+
+  // Service status queries
+  const { refetch: refetchServices } = useQuery({
+    queryKey: ['services-status'],
+    queryFn: async () => {
+      const response = await api.get('/services/status')
+      return response.data
+    },
+    refetchInterval: 10000,
+  })
+
+  // PostgreSQL mutations
+  const postgresStartMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post('/services/postgres/start')
+      return response.data
+    },
+    onMutate: () => {
+      setServiceFeedback({ service: 'postgres', action: 'start', status: 'loading', message: 'Starting PostgreSQL...' })
+    },
+    onSuccess: (data) => {
+      setServiceFeedback({ service: 'postgres', action: 'start', status: data.success ? 'success' : 'error', message: data.message })
+      queryClient.invalidateQueries({ queryKey: ['services-status'] })
+      queryClient.invalidateQueries({ queryKey: ['health-database'] })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    },
+    onError: (error: any) => {
+      setServiceFeedback({ service: 'postgres', action: 'start', status: 'error', message: error.response?.data?.detail || 'Failed to start' })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    }
+  })
+
+  const postgresStopMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post('/services/postgres/stop')
+      return response.data
+    },
+    onMutate: () => {
+      setServiceFeedback({ service: 'postgres', action: 'stop', status: 'loading', message: 'Stopping PostgreSQL...' })
+    },
+    onSuccess: (data) => {
+      setServiceFeedback({ service: 'postgres', action: 'stop', status: data.success ? 'success' : 'error', message: data.message })
+      queryClient.invalidateQueries({ queryKey: ['services-status'] })
+      queryClient.invalidateQueries({ queryKey: ['health-database'] })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    },
+    onError: (error: any) => {
+      setServiceFeedback({ service: 'postgres', action: 'stop', status: 'error', message: error.response?.data?.detail || 'Failed to stop' })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    }
+  })
+
+  const postgresRestartMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post('/services/postgres/restart')
+      return response.data
+    },
+    onMutate: () => {
+      setServiceFeedback({ service: 'postgres', action: 'restart', status: 'loading', message: 'Restarting PostgreSQL...' })
+    },
+    onSuccess: (data) => {
+      setServiceFeedback({ service: 'postgres', action: 'restart', status: data.success ? 'success' : 'error', message: data.message })
+      queryClient.invalidateQueries({ queryKey: ['services-status'] })
+      queryClient.invalidateQueries({ queryKey: ['health-database'] })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    },
+    onError: (error: any) => {
+      setServiceFeedback({ service: 'postgres', action: 'restart', status: 'error', message: error.response?.data?.detail || 'Failed to restart' })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    }
+  })
+
+  const postgresMaintenanceMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post('/services/postgres/maintenance')
+      return response.data
+    },
+    onMutate: () => {
+      setServiceFeedback({ service: 'postgres', action: 'maintenance', status: 'loading', message: 'Running maintenance (VACUUM ANALYZE)...' })
+    },
+    onSuccess: (data) => {
+      setServiceFeedback({ service: 'postgres', action: 'maintenance', status: data.success ? 'success' : 'error', message: data.message })
+      setTimeout(() => setServiceFeedback(null), 8000)
+    },
+    onError: (error: any) => {
+      setServiceFeedback({ service: 'postgres', action: 'maintenance', status: 'error', message: error.response?.data?.detail || 'Maintenance failed' })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    }
+  })
+
+  // Redis mutations
+  const redisStartMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post('/services/redis/start')
+      return response.data
+    },
+    onMutate: () => {
+      setServiceFeedback({ service: 'redis', action: 'start', status: 'loading', message: 'Starting Redis...' })
+    },
+    onSuccess: (data) => {
+      setServiceFeedback({ service: 'redis', action: 'start', status: data.success ? 'success' : 'error', message: data.message })
+      queryClient.invalidateQueries({ queryKey: ['services-status'] })
+      queryClient.invalidateQueries({ queryKey: ['health-redis'] })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    },
+    onError: (error: any) => {
+      setServiceFeedback({ service: 'redis', action: 'start', status: 'error', message: error.response?.data?.detail || 'Failed to start' })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    }
+  })
+
+  const redisStopMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post('/services/redis/stop')
+      return response.data
+    },
+    onMutate: () => {
+      setServiceFeedback({ service: 'redis', action: 'stop', status: 'loading', message: 'Stopping Redis...' })
+    },
+    onSuccess: (data) => {
+      setServiceFeedback({ service: 'redis', action: 'stop', status: data.success ? 'success' : 'error', message: data.message })
+      queryClient.invalidateQueries({ queryKey: ['services-status'] })
+      queryClient.invalidateQueries({ queryKey: ['health-redis'] })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    },
+    onError: (error: any) => {
+      setServiceFeedback({ service: 'redis', action: 'stop', status: 'error', message: error.response?.data?.detail || 'Failed to stop' })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    }
+  })
+
+  const redisRestartMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post('/services/redis/restart')
+      return response.data
+    },
+    onMutate: () => {
+      setServiceFeedback({ service: 'redis', action: 'restart', status: 'loading', message: 'Restarting Redis...' })
+    },
+    onSuccess: (data) => {
+      setServiceFeedback({ service: 'redis', action: 'restart', status: data.success ? 'success' : 'error', message: data.message })
+      queryClient.invalidateQueries({ queryKey: ['services-status'] })
+      queryClient.invalidateQueries({ queryKey: ['health-redis'] })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    },
+    onError: (error: any) => {
+      setServiceFeedback({ service: 'redis', action: 'restart', status: 'error', message: error.response?.data?.detail || 'Failed to restart' })
+      setTimeout(() => setServiceFeedback(null), 5000)
+    }
+  })
+
   const { data: serverHealth } = useQuery({
     queryKey: ['health-server'],
     queryFn: async () => {
@@ -201,9 +359,18 @@ export default function Health() {
 
           {/* Database Health */}
           <div className="glass rounded-2xl p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <Database className="text-green-400" size={24} />
-              <h2 className="text-xl font-semibold text-white">Database</h2>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <Database className="text-green-400" size={24} />
+                <h2 className="text-xl font-semibold text-white">PostgreSQL</h2>
+              </div>
+              <button
+                onClick={() => refetchServices()}
+                className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                title="Refresh status"
+              >
+                <RefreshCw size={16} className="text-slate-400" />
+              </button>
             </div>
             {dbHealth ? (
               <div className="space-y-3">
@@ -222,9 +389,71 @@ export default function Health() {
                     Response time: {dbHealth.response_time_ms.toFixed(2)}ms
                   </div>
                 )}
+                {dbHealth.version && (
+                  <div className="text-slate-400 text-sm">
+                    Version: {dbHealth.version}
+                  </div>
+                )}
                 {dbHealth.error && (
                   <div className="text-rose-400 text-sm bg-rose-500/20 p-2 rounded">
                     {dbHealth.error}
+                  </div>
+                )}
+                
+                {/* Service Controls */}
+                <div className="pt-3 border-t border-white/10">
+                  <div className="text-xs text-slate-500 mb-2">Service Controls</div>
+                  <div className="flex flex-wrap gap-2">
+                    {!dbHealth.connected ? (
+                      <button
+                        onClick={() => postgresStartMutation.mutate()}
+                        disabled={postgresStartMutation.isPending}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-400 text-xs rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        {postgresStartMutation.isPending ? <Loader className="animate-spin" size={12} /> : <Play size={12} />}
+                        Start
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => postgresRestartMutation.mutate()}
+                          disabled={postgresRestartMutation.isPending}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-400 text-xs rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {postgresRestartMutation.isPending ? <Loader className="animate-spin" size={12} /> : <RefreshCw size={12} />}
+                          Restart
+                        </button>
+                        <button
+                          onClick={() => postgresStopMutation.mutate()}
+                          disabled={postgresStopMutation.isPending}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 text-xs rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {postgresStopMutation.isPending ? <Loader className="animate-spin" size={12} /> : <Square size={12} />}
+                          Stop
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() => postgresMaintenanceMutation.mutate()}
+                      disabled={postgresMaintenanceMutation.isPending || !dbHealth.connected}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-400 text-xs rounded-lg transition-colors disabled:opacity-50"
+                      title="Run VACUUM ANALYZE"
+                    >
+                      {postgresMaintenanceMutation.isPending ? <Loader className="animate-spin" size={12} /> : <Wrench size={12} />}
+                      Maintenance
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Feedback */}
+                {serviceFeedback && serviceFeedback.service === 'postgres' && (
+                  <div className={`text-sm p-2 rounded ${
+                    serviceFeedback.status === 'loading' ? 'bg-sky-500/20 text-sky-400' :
+                    serviceFeedback.status === 'success' ? 'bg-green-500/20 text-green-400' :
+                    'bg-rose-500/20 text-rose-400'
+                  }`}>
+                    {serviceFeedback.status === 'loading' && <Loader className="inline animate-spin mr-2" size={12} />}
+                    {serviceFeedback.message}
                   </div>
                 )}
               </div>
@@ -238,9 +467,18 @@ export default function Health() {
 
           {/* Redis Health */}
           <div className="glass rounded-2xl p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <Activity className="text-purple-400" size={24} />
-              <h2 className="text-xl font-semibold text-white">Redis</h2>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <Activity className="text-purple-400" size={24} />
+                <h2 className="text-xl font-semibold text-white">Redis</h2>
+              </div>
+              <button
+                onClick={() => refetchServices()}
+                className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                title="Refresh status"
+              >
+                <RefreshCw size={16} className="text-slate-400" />
+              </button>
             </div>
             {redisHealth ? (
               <div className="space-y-3">
@@ -262,6 +500,54 @@ export default function Health() {
                 {redisHealth.error && (
                   <div className="text-rose-400 text-sm bg-rose-500/20 p-2 rounded">
                     {redisHealth.error}
+                  </div>
+                )}
+                
+                {/* Service Controls */}
+                <div className="pt-3 border-t border-white/10">
+                  <div className="text-xs text-slate-500 mb-2">Service Controls</div>
+                  <div className="flex flex-wrap gap-2">
+                    {!redisHealth.connected ? (
+                      <button
+                        onClick={() => redisStartMutation.mutate()}
+                        disabled={redisStartMutation.isPending}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-400 text-xs rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        {redisStartMutation.isPending ? <Loader className="animate-spin" size={12} /> : <Play size={12} />}
+                        Start
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => redisRestartMutation.mutate()}
+                          disabled={redisRestartMutation.isPending}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-400 text-xs rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {redisRestartMutation.isPending ? <Loader className="animate-spin" size={12} /> : <RefreshCw size={12} />}
+                          Restart
+                        </button>
+                        <button
+                          onClick={() => redisStopMutation.mutate()}
+                          disabled={redisStopMutation.isPending}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 text-xs rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {redisStopMutation.isPending ? <Loader className="animate-spin" size={12} /> : <Square size={12} />}
+                          Stop
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Feedback */}
+                {serviceFeedback && serviceFeedback.service === 'redis' && (
+                  <div className={`text-sm p-2 rounded ${
+                    serviceFeedback.status === 'loading' ? 'bg-sky-500/20 text-sky-400' :
+                    serviceFeedback.status === 'success' ? 'bg-green-500/20 text-green-400' :
+                    'bg-rose-500/20 text-rose-400'
+                  }`}>
+                    {serviceFeedback.status === 'loading' && <Loader className="inline animate-spin mr-2" size={12} />}
+                    {serviceFeedback.message}
                   </div>
                 )}
               </div>
