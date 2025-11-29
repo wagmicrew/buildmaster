@@ -876,6 +876,161 @@ async def build_scripts_analyze_endpoint(
         )
 
 
+@app.get("/api/build/scripts/mjs", response_model=dict)
+async def build_scripts_mjs_endpoint(
+    environment: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """Get all .mjs build script files from the project"""
+    try:
+        import os
+        import glob
+        
+        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        
+        # Find all .mjs files that look like build scripts
+        mjs_files = []
+        
+        # Search in common locations for build scripts
+        search_patterns = [
+            os.path.join(project_dir, "*.mjs"),
+            os.path.join(project_dir, "scripts", "*.mjs"),
+            os.path.join(project_dir, "build", "*.mjs"),
+            os.path.join(project_dir, "config", "*.mjs"),
+        ]
+        
+        for pattern in search_patterns:
+            for file_path in glob.glob(pattern):
+                try:
+                    stat = os.stat(file_path)
+                    mjs_files.append({
+                        "name": os.path.basename(file_path),
+                        "path": file_path,
+                        "size": stat.st_size,
+                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    })
+                except:
+                    pass
+        
+        # Also check for next.config.mjs specifically
+        next_config = os.path.join(project_dir, "next.config.mjs")
+        if os.path.exists(next_config) and not any(f["path"] == next_config for f in mjs_files):
+            stat = os.stat(next_config)
+            mjs_files.insert(0, {
+                "name": "next.config.mjs",
+                "path": next_config,
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
+        
+        # Sort by name
+        mjs_files.sort(key=lambda x: x["name"])
+        
+        return {
+            "files": mjs_files,
+            "path": project_dir,
+            "environment": environment
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/build/scripts/mjs/content", response_model=dict)
+async def build_scripts_mjs_content_endpoint(
+    path: str,
+    email: str = Depends(verify_session_token)
+):
+    """Get content of an MJS file"""
+    try:
+        import os
+        
+        # Security check - ensure path is within allowed directories
+        abs_path = os.path.abspath(path)
+        dev_dir = os.path.abspath(settings.DEV_DIR)
+        prod_dir = os.path.abspath(settings.PROD_DIR)
+        
+        if not (abs_path.startswith(dev_dir) or abs_path.startswith(prod_dir)):
+            raise HTTPException(status_code=403, detail="Access denied - path outside project directory")
+        
+        if not os.path.exists(abs_path):
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        if not abs_path.endswith('.mjs'):
+            raise HTTPException(status_code=400, detail="Only .mjs files are allowed")
+        
+        with open(abs_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        return {
+            "content": content,
+            "path": abs_path,
+            "size": len(content)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/build/scripts/mjs/save", response_model=dict)
+async def build_scripts_mjs_save_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Save content to an MJS file"""
+    try:
+        import os
+        
+        path = payload.get("path", "").strip()
+        content = payload.get("content", "")
+        
+        if not path:
+            raise HTTPException(status_code=400, detail="Path is required")
+        
+        # Security check - ensure path is within allowed directories
+        abs_path = os.path.abspath(path)
+        dev_dir = os.path.abspath(settings.DEV_DIR)
+        prod_dir = os.path.abspath(settings.PROD_DIR)
+        
+        if not (abs_path.startswith(dev_dir) or abs_path.startswith(prod_dir)):
+            raise HTTPException(status_code=403, detail="Access denied - path outside project directory")
+        
+        if not abs_path.endswith('.mjs'):
+            raise HTTPException(status_code=400, detail="Only .mjs files are allowed")
+        
+        # Create backup before saving
+        if os.path.exists(abs_path):
+            backup_path = abs_path + ".backup"
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                backup_content = f.read()
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                f.write(backup_content)
+        
+        # Save new content
+        with open(abs_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        return {
+            "success": True,
+            "message": f"File saved: {os.path.basename(abs_path)}",
+            "path": abs_path,
+            "size": len(content)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
 # Deploy operations
 @app.post("/api/deploy/golive", response_model=dict)
 async def deploy_golive_endpoint(

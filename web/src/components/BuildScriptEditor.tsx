@@ -3,10 +3,165 @@ import {
   FileCode, Save, Play, AlertTriangle, CheckCircle, Zap, 
   Cpu, RefreshCw, Plus, Trash2, Copy,
   ChevronDown, ChevronRight, Lightbulb, Shield, Timer,
-  AlertCircle, FileText, Code2
+  AlertCircle, FileText, Code2, FileJson
 } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../services/api'
+
+// MJS file interface
+interface MjsFile {
+  name: string
+  path: string
+  size: number
+  modified: string
+}
+
+// MJS Analysis result
+interface MjsAnalysisResult {
+  suggestions: OptimizationSuggestion[]
+  features: string[]
+  memorySettings: { found: boolean; value?: number }
+  hasPhasing: boolean
+  hasErrorHandling: boolean
+  hasLogging: boolean
+  estimatedComplexity: 'simple' | 'moderate' | 'complex'
+}
+
+// Analyze MJS file content
+function analyzeMjsContent(content: string): MjsAnalysisResult {
+  const suggestions: OptimizationSuggestion[] = []
+  const features: string[] = []
+  
+  // Check for memory settings
+  const memMatch = content.match(/max[_-]?old[_-]?space[_-]?size[=:\s]+(\d+)/i)
+  const memorySettings = memMatch 
+    ? { found: true, value: parseInt(memMatch[1]) }
+    : { found: false }
+  
+  if (!memorySettings.found) {
+    suggestions.push({
+      type: 'warning',
+      title: 'No memory configuration',
+      description: 'Consider adding --max-old-space-size for large builds',
+      fix: 'Add: process.env.NODE_OPTIONS = "--max-old-space-size=8192"',
+      impact: 'high'
+    })
+  } else if (memorySettings.value && memorySettings.value < 4096) {
+    suggestions.push({
+      type: 'warning',
+      title: 'Low memory limit',
+      description: `${memorySettings.value}MB may not be enough`,
+      fix: 'Increase to at least 4096 or 8192',
+      impact: 'medium'
+    })
+  } else {
+    features.push(`Memory: ${memorySettings.value}MB`)
+  }
+  
+  // Check for phased building
+  const hasPhasing = content.includes('phase') || content.includes('chunk') || content.includes('batch')
+  if (hasPhasing) {
+    features.push('Phased/Chunked Build')
+  }
+  
+  // Check for error handling
+  const hasErrorHandling = content.includes('try') && content.includes('catch')
+  if (!hasErrorHandling) {
+    suggestions.push({
+      type: 'warning',
+      title: 'No error handling',
+      description: 'Build script lacks try/catch blocks',
+      fix: 'Wrap main logic in try/catch for graceful error handling',
+      impact: 'medium'
+    })
+  } else {
+    features.push('Error Handling')
+  }
+  
+  // Check for logging
+  const hasLogging = content.includes('console.log') || content.includes('console.info')
+  if (hasLogging) {
+    features.push('Logging')
+  }
+  
+  // Check for async/await
+  if (content.includes('async') && content.includes('await')) {
+    features.push('Async/Await')
+  }
+  
+  // Check for spawn/exec (subprocess)
+  if (content.includes('spawn') || content.includes('exec')) {
+    features.push('Subprocess Execution')
+  }
+  
+  // Check for file system operations
+  if (content.includes('fs.') || content.includes("from 'fs'") || content.includes('from "fs"')) {
+    features.push('File System Operations')
+  }
+  
+  // Check for environment variables
+  if (content.includes('process.env')) {
+    features.push('Environment Variables')
+  }
+  
+  // Check for infinite loops
+  if (content.includes('while (true)') || content.includes('while(true)') || content.includes('for (;;)')) {
+    suggestions.push({
+      type: 'error',
+      title: 'Potential infinite loop',
+      description: 'Script contains patterns that may run forever',
+      impact: 'high'
+    })
+  }
+  
+  // Check for timeout handling
+  if (content.includes('timeout') || content.includes('setTimeout')) {
+    features.push('Timeout Handling')
+  } else {
+    suggestions.push({
+      type: 'info',
+      title: 'No timeout handling',
+      description: 'Consider adding timeouts for long operations',
+      fix: 'Use setTimeout or AbortController for timeout protection',
+      impact: 'low'
+    })
+  }
+  
+  // Check for memory monitoring
+  if (content.includes('memoryUsage') || content.includes('heapUsed')) {
+    features.push('Memory Monitoring')
+  }
+  
+  // Check for cleanup
+  if (content.includes('finally') || content.includes('cleanup') || content.includes('rimraf')) {
+    features.push('Cleanup Logic')
+  }
+  
+  // Estimate complexity
+  const lineCount = content.split('\n').length
+  const estimatedComplexity: 'simple' | 'moderate' | 'complex' = 
+    lineCount < 100 ? 'simple' : lineCount < 300 ? 'moderate' : 'complex'
+  
+  // Add success if no issues
+  if (suggestions.filter(s => s.type === 'error' || s.type === 'warning').length === 0) {
+    suggestions.push({
+      type: 'success',
+      title: 'Script looks well-structured!',
+      description: 'No major issues detected',
+      impact: 'low'
+    })
+  }
+  
+  return {
+    suggestions,
+    features,
+    memorySettings,
+    hasPhasing,
+    hasErrorHandling,
+    hasLogging,
+    estimatedComplexity
+  }
+}
 
 // Build script templates
 const SCRIPT_TEMPLATES = {
@@ -270,6 +425,13 @@ export default function BuildScriptEditor() {
   const [newScriptDescription, setNewScriptDescription] = useState('')
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null)
   const [environment, setEnvironment] = useState<'dev' | 'prod'>('dev')
+  
+  // MJS file state
+  const [editorMode, setEditorMode] = useState<'scripts' | 'mjs'>('scripts')
+  const [selectedMjsFile, setSelectedMjsFile] = useState<MjsFile | null>(null)
+  const [mjsContent, setMjsContent] = useState('')
+  const [mjsAnalysis, setMjsAnalysis] = useState<MjsAnalysisResult | null>(null)
+  const [isMjsEditing, setIsMjsEditing] = useState(false)
 
   // Fetch available scripts
   const { data: scriptsData, isLoading: scriptsLoading } = useQuery({
@@ -333,6 +495,29 @@ export default function BuildScriptEditor() {
     }
   })
 
+  // Fetch MJS files
+  const { data: mjsFilesData, isLoading: mjsLoading } = useQuery({
+    queryKey: ['mjs-files', environment],
+    queryFn: async () => {
+      const response = await api.get('/build/scripts/mjs', {
+        params: { environment }
+      })
+      return response.data
+    }
+  })
+
+  // Save MJS file mutation
+  const saveMjsMutation = useMutation({
+    mutationFn: async (data: { path: string; content: string }) => {
+      const response = await api.post('/build/scripts/mjs/save', data)
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['mjs-files'] })
+      setIsMjsEditing(false)
+    }
+  })
+
   // Analyze script when editing
   useEffect(() => {
     if (editedCommand) {
@@ -342,6 +527,31 @@ export default function BuildScriptEditor() {
       setAnalysis(null)
     }
   }, [editedCommand])
+
+  // Analyze MJS content when editing
+  useEffect(() => {
+    if (mjsContent) {
+      const result = analyzeMjsContent(mjsContent)
+      setMjsAnalysis(result)
+    } else {
+      setMjsAnalysis(null)
+    }
+  }, [mjsContent])
+
+  // Handle MJS file selection
+  const handleSelectMjsFile = useCallback(async (file: MjsFile) => {
+    setSelectedMjsFile(file)
+    setIsMjsEditing(false)
+    try {
+      const response = await api.get('/build/scripts/mjs/content', {
+        params: { path: file.path }
+      })
+      setMjsContent(response.data.content || '')
+    } catch (error) {
+      console.error('Failed to load MJS file:', error)
+      setMjsContent('// Failed to load file content')
+    }
+  }, [])
 
   // Handle script selection
   const handleSelectScript = useCallback((script: BuildScript) => {
@@ -391,40 +601,294 @@ export default function BuildScriptEditor() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <FileCode className="text-purple-400" size={28} />
-          <div>
-            <h2 className="text-2xl font-bold text-white">Build Script Editor</h2>
-            <p className="text-slate-400">Edit, analyze, and optimize your build scripts</p>
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <FileCode className="text-purple-400" size={28} />
+            <div>
+              <h2 className="text-2xl font-bold text-white">Build Script Editor</h2>
+              <p className="text-slate-400">Edit, analyze, and optimize your build scripts</p>
+            </div>
+          </div>
+          
+          {/* Environment Toggle */}
+          <div className="flex items-center gap-2 bg-slate-800 rounded-lg p-1">
+            <button
+              onClick={() => setEnvironment('dev')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                environment === 'dev'
+                  ? 'bg-blue-500 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Development
+            </button>
+            <button
+              onClick={() => setEnvironment('prod')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                environment === 'prod'
+                  ? 'bg-emerald-500 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Production
+            </button>
           </div>
         </div>
-        
-        {/* Environment Toggle */}
-        <div className="flex items-center gap-2 bg-slate-800 rounded-lg p-1">
+
+        {/* Mode Toggle: Scripts vs MJS Files */}
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setEnvironment('dev')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              environment === 'dev'
-                ? 'bg-blue-500 text-white'
-                : 'text-slate-400 hover:text-white'
+            onClick={() => setEditorMode('scripts')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              editorMode === 'scripts'
+                ? 'bg-purple-500 text-white'
+                : 'bg-slate-800 text-slate-400 hover:text-white'
             }`}
           >
-            Development
+            <FileText size={16} />
+            Package Scripts
           </button>
           <button
-            onClick={() => setEnvironment('prod')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              environment === 'prod'
-                ? 'bg-emerald-500 text-white'
-                : 'text-slate-400 hover:text-white'
+            onClick={() => setEditorMode('mjs')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              editorMode === 'mjs'
+                ? 'bg-orange-500 text-white'
+                : 'bg-slate-800 text-slate-400 hover:text-white'
             }`}
           >
-            Production
+            <FileJson size={16} />
+            MJS Build Files
           </button>
         </div>
       </div>
 
+      {/* MJS Files Mode */}
+      {editorMode === 'mjs' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* MJS File List */}
+          <div className="lg:col-span-1 space-y-4">
+            <div className="bg-slate-800/50 rounded-xl p-4 border border-orange-500/30">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <FileJson size={18} className="text-orange-400" />
+                  MJS Build Files
+                </h3>
+              </div>
+
+              {mjsLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw className="animate-spin text-slate-400" size={24} />
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                  {(mjsFilesData?.files || []).map((file: MjsFile) => (
+                    <button
+                      key={file.path}
+                      onClick={() => handleSelectMjsFile(file)}
+                      className={`w-full text-left p-3 rounded-lg transition-all ${
+                        selectedMjsFile?.path === file.path
+                          ? 'bg-orange-500/20 border border-orange-500/50'
+                          : 'bg-white/5 hover:bg-white/10 border border-transparent'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-white text-sm">{file.name}</span>
+                        <span className="text-xs text-slate-500">
+                          {(file.size / 1024).toFixed(1)}KB
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1 truncate font-mono">
+                        {file.path}
+                      </p>
+                    </button>
+                  ))}
+                  {(!mjsFilesData?.files || mjsFilesData.files.length === 0) && (
+                    <div className="text-center py-8 text-slate-400 text-sm">
+                      No .mjs build files found in project
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* MJS Editor & Analysis */}
+          <div className="lg:col-span-2 space-y-4">
+            {selectedMjsFile ? (
+              <>
+                {/* MJS Editor */}
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-orange-500/30">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                      <Code2 size={18} className="text-orange-400" />
+                      {selectedMjsFile.name}
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      {isMjsEditing ? (
+                        <>
+                          <button
+                            onClick={() => setIsMjsEditing(false)}
+                            className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => saveMjsMutation.mutate({
+                              path: selectedMjsFile.path,
+                              content: mjsContent
+                            })}
+                            disabled={saveMjsMutation.isPending}
+                            className="px-3 py-1.5 text-sm bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors flex items-center gap-2"
+                          >
+                            <Save size={14} />
+                            {saveMjsMutation.isPending ? 'Saving...' : 'Save'}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => setIsMjsEditing(true)}
+                            className="px-3 py-1.5 text-sm bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 rounded-lg transition-colors"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => navigator.clipboard.writeText(mjsContent)}
+                            className="p-1.5 text-slate-400 hover:text-white transition-colors"
+                            title="Copy content"
+                          >
+                            <Copy size={16} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* MJS Content Editor */}
+                  <div className="relative">
+                    <textarea
+                      value={mjsContent}
+                      onChange={(e) => setMjsContent(e.target.value)}
+                      readOnly={!isMjsEditing}
+                      className={`w-full h-80 bg-slate-900 text-green-400 font-mono text-xs p-4 rounded-lg border ${
+                        isMjsEditing ? 'border-orange-500' : 'border-slate-600'
+                      } focus:outline-none resize-none overflow-auto`}
+                      placeholder="// MJS file content..."
+                      spellCheck={false}
+                    />
+                    {!isMjsEditing && (
+                      <div className="absolute inset-0 bg-transparent cursor-not-allowed" />
+                    )}
+                  </div>
+                </div>
+
+                {/* MJS Analysis Panel */}
+                {mjsAnalysis && (
+                  <div className="bg-slate-800/50 rounded-xl p-4 border border-orange-500/30">
+                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <Zap size={18} className="text-yellow-400" />
+                      MJS Script Analysis
+                    </h3>
+
+                    {/* Features Detected */}
+                    <div className="mb-4">
+                      <h4 className="text-sm font-medium text-slate-300 mb-2">Features Detected</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {mjsAnalysis.features.map((feature: string, idx: number) => (
+                          <span key={idx} className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded">
+                            {feature}
+                          </span>
+                        ))}
+                        {mjsAnalysis.features.length === 0 && (
+                          <span className="text-xs text-slate-500">No special features detected</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Quick Stats */}
+                    <div className="grid grid-cols-3 gap-4 mb-4">
+                      <div className="bg-white/5 rounded-lg p-3 text-center">
+                        <Cpu className="mx-auto text-purple-400 mb-1" size={20} />
+                        <div className="text-sm text-white font-medium capitalize">{mjsAnalysis.estimatedComplexity}</div>
+                        <div className="text-xs text-slate-400">Complexity</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg p-3 text-center">
+                        <Shield className={`mx-auto mb-1 ${mjsAnalysis.hasErrorHandling ? 'text-green-400' : 'text-yellow-400'}`} size={20} />
+                        <div className={`text-sm font-medium ${mjsAnalysis.hasErrorHandling ? 'text-green-400' : 'text-yellow-400'}`}>
+                          {mjsAnalysis.hasErrorHandling ? 'Yes' : 'No'}
+                        </div>
+                        <div className="text-xs text-slate-400">Error Handling</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg p-3 text-center">
+                        <Timer className={`mx-auto mb-1 ${mjsAnalysis.hasPhasing ? 'text-green-400' : 'text-slate-400'}`} size={20} />
+                        <div className={`text-sm font-medium ${mjsAnalysis.hasPhasing ? 'text-green-400' : 'text-slate-400'}`}>
+                          {mjsAnalysis.hasPhasing ? 'Yes' : 'No'}
+                        </div>
+                        <div className="text-xs text-slate-400">Phased Build</div>
+                      </div>
+                    </div>
+
+                    {/* Suggestions */}
+                    <div>
+                      <h4 className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
+                        <Lightbulb size={14} />
+                        Optimization Suggestions
+                      </h4>
+                      <div className="space-y-2">
+                        {mjsAnalysis.suggestions.map((suggestion: OptimizationSuggestion, idx: number) => (
+                          <div
+                            key={idx}
+                            className={`p-3 rounded-lg border ${
+                              suggestion.type === 'error' ? 'bg-rose-500/10 border-rose-500/30' :
+                              suggestion.type === 'warning' ? 'bg-yellow-500/10 border-yellow-500/30' :
+                              suggestion.type === 'success' ? 'bg-green-500/10 border-green-500/30' :
+                              'bg-blue-500/10 border-blue-500/30'
+                            }`}
+                          >
+                            <div className="flex items-start gap-2">
+                              {getSuggestionIcon(suggestion.type)}
+                              <div className="flex-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-sm font-medium text-white">{suggestion.title}</span>
+                                  <span className={`text-xs px-2 py-0.5 rounded ${
+                                    suggestion.impact === 'high' ? 'bg-rose-500/20 text-rose-400' :
+                                    suggestion.impact === 'medium' ? 'bg-yellow-500/20 text-yellow-400' :
+                                    'bg-slate-500/20 text-slate-400'
+                                  }`}>
+                                    {suggestion.impact} impact
+                                  </span>
+                                </div>
+                                <p className="text-xs text-slate-400 mt-1">{suggestion.description}</p>
+                                {suggestion.fix && (
+                                  <div className="mt-2 p-2 bg-slate-900 rounded text-xs font-mono text-green-400">
+                                    💡 {suggestion.fix}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="bg-slate-800/50 rounded-xl p-8 border border-orange-500/30 text-center">
+                <FileJson className="mx-auto text-slate-500 mb-4" size={48} />
+                <h3 className="text-xl font-semibold text-white mb-2">Select an MJS File</h3>
+                <p className="text-slate-400">
+                  Choose a .mjs build script from the list to view, edit, and analyze it
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Scripts Mode */}
+      {editorMode === 'scripts' && (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Script List */}
         <div className="lg:col-span-1 space-y-4">
@@ -756,6 +1220,7 @@ export default function BuildScriptEditor() {
           )}
         </div>
       </div>
+      )}
 
       {/* New Script Modal */}
       {showNewScript && (
