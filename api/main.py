@@ -34,6 +34,7 @@ from health import (
     get_environment_health,
     check_database_health_for_env
 )
+from sanity_checker import run_sanity_check, SanityReport
 from git_status import (
     get_detailed_git_status,
     git_stash_changes,
@@ -881,47 +882,70 @@ async def build_scripts_mjs_endpoint(
     environment: str = "dev",
     email: str = Depends(verify_session_token)
 ):
-    """Get all .mjs build script files from the project"""
+    """Get all .mjs and .js config files from the project"""
     try:
         import os
         import glob
         
         project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
         
-        # Find all .mjs files that look like build scripts
+        # Find all .mjs files recursively (but not in node_modules)
         mjs_files = []
+        seen_paths = set()
         
-        # Search in common locations for build scripts
-        search_patterns = [
-            os.path.join(project_dir, "*.mjs"),
-            os.path.join(project_dir, "scripts", "*.mjs"),
-            os.path.join(project_dir, "build", "*.mjs"),
-            os.path.join(project_dir, "config", "*.mjs"),
+        # Walk the directory tree to find all .mjs files
+        for root, dirs, files in os.walk(project_dir):
+            # Skip node_modules and .next directories
+            dirs[:] = [d for d in dirs if d not in ['node_modules', '.next', '.git', 'dist', 'build']]
+            
+            for file in files:
+                if file.endswith('.mjs'):
+                    file_path = os.path.join(root, file)
+                    if file_path not in seen_paths:
+                        try:
+                            stat = os.stat(file_path)
+                            rel_path = os.path.relpath(file_path, project_dir)
+                            mjs_files.append({
+                                "name": file,
+                                "path": file_path,
+                                "relative_path": rel_path,
+                                "size": stat.st_size,
+                                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                                "type": "mjs"
+                            })
+                            seen_paths.add(file_path)
+                        except:
+                            pass
+        
+        # Also include important config files
+        config_files = [
+            "next.config.js",
+            "vite.config.js", 
+            "vite.config.ts",
+            "tailwind.config.js",
+            "tailwind.config.ts",
+            "postcss.config.js",
+            "postcss.config.cjs",
+            "tsconfig.json",
+            "package.json",
         ]
         
-        for pattern in search_patterns:
-            for file_path in glob.glob(pattern):
+        for config_file in config_files:
+            file_path = os.path.join(project_dir, config_file)
+            if os.path.exists(file_path) and file_path not in seen_paths:
                 try:
                     stat = os.stat(file_path)
                     mjs_files.append({
-                        "name": os.path.basename(file_path),
+                        "name": config_file,
                         "path": file_path,
+                        "relative_path": config_file,
                         "size": stat.st_size,
-                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        "type": "config"
                     })
+                    seen_paths.add(file_path)
                 except:
                     pass
-        
-        # Also check for next.config.mjs specifically
-        next_config = os.path.join(project_dir, "next.config.mjs")
-        if os.path.exists(next_config) and not any(f["path"] == next_config for f in mjs_files):
-            stat = os.stat(next_config)
-            mjs_files.insert(0, {
-                "name": "next.config.mjs",
-                "path": next_config,
-                "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
-            })
         
         # Sort by name
         mjs_files.sort(key=lambda x: x["name"])
@@ -929,7 +953,8 @@ async def build_scripts_mjs_endpoint(
         return {
             "files": mjs_files,
             "path": project_dir,
-            "environment": environment
+            "environment": environment,
+            "count": len(mjs_files)
         }
     except Exception as e:
         raise HTTPException(
@@ -938,12 +963,68 @@ async def build_scripts_mjs_endpoint(
         )
 
 
-@app.get("/api/build/scripts/mjs/content", response_model=dict)
-async def build_scripts_mjs_content_endpoint(
+@app.get("/api/build/scripts/env", response_model=dict)
+async def build_scripts_env_endpoint(
+    environment: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """Get all .env files from the project"""
+    try:
+        import os
+        
+        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        
+        env_files = []
+        
+        # Common .env file patterns
+        env_patterns = [
+            ".env",
+            ".env.local",
+            ".env.development",
+            ".env.development.local",
+            ".env.production",
+            ".env.production.local",
+            ".env.test",
+            ".env.example",
+            ".env.sample",
+        ]
+        
+        for env_file in env_patterns:
+            file_path = os.path.join(project_dir, env_file)
+            if os.path.exists(file_path):
+                try:
+                    stat = os.stat(file_path)
+                    env_files.append({
+                        "name": env_file,
+                        "path": file_path,
+                        "size": stat.st_size,
+                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    })
+                except:
+                    pass
+        
+        # Sort by name
+        env_files.sort(key=lambda x: x["name"])
+        
+        return {
+            "files": env_files,
+            "path": project_dir,
+            "environment": environment,
+            "count": len(env_files)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/build/scripts/env/content", response_model=dict)
+async def build_scripts_env_content_endpoint(
     path: str,
     email: str = Depends(verify_session_token)
 ):
-    """Get content of an MJS file"""
+    """Get content of an ENV file"""
     try:
         import os
         
@@ -958,8 +1039,10 @@ async def build_scripts_mjs_content_endpoint(
         if not os.path.exists(abs_path):
             raise HTTPException(status_code=404, detail="File not found")
         
-        if not abs_path.endswith('.mjs'):
-            raise HTTPException(status_code=400, detail="Only .mjs files are allowed")
+        # Only allow .env files
+        basename = os.path.basename(abs_path)
+        if not basename.startswith('.env'):
+            raise HTTPException(status_code=400, detail="Only .env files are allowed")
         
         with open(abs_path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -978,12 +1061,12 @@ async def build_scripts_mjs_content_endpoint(
         )
 
 
-@app.post("/api/build/scripts/mjs/save", response_model=dict)
-async def build_scripts_mjs_save_endpoint(
+@app.post("/api/build/scripts/env/save", response_model=dict)
+async def build_scripts_env_save_endpoint(
     payload: dict,
     email: str = Depends(verify_session_token)
 ):
-    """Save content to an MJS file"""
+    """Save content to an ENV file"""
     try:
         import os
         
@@ -1001,8 +1084,109 @@ async def build_scripts_mjs_save_endpoint(
         if not (abs_path.startswith(dev_dir) or abs_path.startswith(prod_dir)):
             raise HTTPException(status_code=403, detail="Access denied - path outside project directory")
         
-        if not abs_path.endswith('.mjs'):
-            raise HTTPException(status_code=400, detail="Only .mjs files are allowed")
+        # Only allow .env files
+        basename = os.path.basename(abs_path)
+        if not basename.startswith('.env'):
+            raise HTTPException(status_code=400, detail="Only .env files are allowed")
+        
+        # Create backup before saving
+        if os.path.exists(abs_path):
+            backup_path = abs_path + ".backup"
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                backup_content = f.read()
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                f.write(backup_content)
+        
+        # Save new content
+        with open(abs_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        return {
+            "success": True,
+            "message": f"File saved: {basename}",
+            "path": abs_path,
+            "size": len(content)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/build/scripts/mjs/content", response_model=dict)
+async def build_scripts_mjs_content_endpoint(
+    path: str,
+    email: str = Depends(verify_session_token)
+):
+    """Get content of an MJS or config file"""
+    try:
+        import os
+        
+        # Security check - ensure path is within allowed directories
+        abs_path = os.path.abspath(path)
+        dev_dir = os.path.abspath(settings.DEV_DIR)
+        prod_dir = os.path.abspath(settings.PROD_DIR)
+        
+        if not (abs_path.startswith(dev_dir) or abs_path.startswith(prod_dir)):
+            raise HTTPException(status_code=403, detail="Access denied - path outside project directory")
+        
+        if not os.path.exists(abs_path):
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Allow .mjs, .js, .ts, .json, .cjs config files
+        allowed_extensions = ['.mjs', '.js', '.ts', '.json', '.cjs']
+        basename = os.path.basename(abs_path)
+        if not any(abs_path.endswith(ext) for ext in allowed_extensions):
+            raise HTTPException(status_code=400, detail=f"Only config files are allowed: {', '.join(allowed_extensions)}")
+        
+        with open(abs_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        return {
+            "content": content,
+            "path": abs_path,
+            "name": basename,
+            "size": len(content)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/build/scripts/mjs/save", response_model=dict)
+async def build_scripts_mjs_save_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Save content to an MJS or config file"""
+    try:
+        import os
+        
+        path = payload.get("path", "").strip()
+        content = payload.get("content", "")
+        
+        if not path:
+            raise HTTPException(status_code=400, detail="Path is required")
+        
+        # Security check - ensure path is within allowed directories
+        abs_path = os.path.abspath(path)
+        dev_dir = os.path.abspath(settings.DEV_DIR)
+        prod_dir = os.path.abspath(settings.PROD_DIR)
+        
+        if not (abs_path.startswith(dev_dir) or abs_path.startswith(prod_dir)):
+            raise HTTPException(status_code=403, detail="Access denied - path outside project directory")
+        
+        # Allow .mjs, .js, .ts, .json, .cjs config files
+        allowed_extensions = ['.mjs', '.js', '.ts', '.json', '.cjs']
+        if not any(abs_path.endswith(ext) for ext in allowed_extensions):
+            raise HTTPException(status_code=400, detail=f"Only config files are allowed: {', '.join(allowed_extensions)}")
         
         # Create backup before saving
         if os.path.exists(abs_path):
@@ -3396,6 +3580,265 @@ async def restart_buildmaster_endpoint(
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
+
+
+# ============================================================================
+# SANITY CHECKER ENDPOINTS
+# ============================================================================
+
+@app.get("/api/sanity/check", response_model=dict)
+async def sanity_check_endpoint(
+    environment: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """
+    Run comprehensive sanity checks for the project.
+    Checks: System, Node, Nginx, Vite, React, Express, Build, Config, Network
+    """
+    try:
+        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        report = await run_sanity_check(project_dir, environment)
+        return report.to_dict()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Sanity check failed: {str(e)}"
+        )
+
+
+@app.get("/api/sanity/quick", response_model=dict)
+async def sanity_quick_check_endpoint(
+    environment: str = "dev",
+    email: str = Depends(verify_session_token)
+):
+    """
+    Run quick sanity checks (system + node only).
+    Faster than full check, good for pre-build validation.
+    """
+    try:
+        from sanity_checker import SanityChecker
+        from datetime import datetime
+        
+        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        checker = SanityChecker(project_dir, environment)
+        
+        # Run only essential checks
+        await checker._check_system()
+        await checker._check_node()
+        await checker._check_build()
+        
+        # Generate summary
+        summary = {
+            "total": len(checker.checks),
+            "pass": sum(1 for c in checker.checks if c.status.value == "pass"),
+            "warn": sum(1 for c in checker.checks if c.status.value == "warn"),
+            "fail": sum(1 for c in checker.checks if c.status.value == "fail"),
+            "skip": sum(1 for c in checker.checks if c.status.value == "skip"),
+        }
+        
+        return {
+            "environment": environment,
+            "project_path": project_dir,
+            "timestamp": datetime.now().isoformat(),
+            "checks": [
+                {
+                    "name": c.name,
+                    "category": c.category.value,
+                    "status": c.status.value,
+                    "message": c.message,
+                    "suggestion": c.suggestion,
+                    "fix_command": c.fix_command
+                }
+                for c in checker.checks
+            ],
+            "summary": summary,
+            "ready_to_build": summary["fail"] == 0
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Quick sanity check failed: {str(e)}"
+        )
+
+
+@app.post("/api/sanity/fix", response_model=dict)
+async def sanity_fix_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """
+    Attempt to auto-fix common sanity check issues.
+    Supports: install_deps, clear_cache, restart_server
+    """
+    try:
+        import subprocess
+        import asyncio
+        
+        fix_type = payload.get("fix_type", "")
+        environment = payload.get("environment", "dev")
+        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        
+        results = []
+        
+        if fix_type == "install_deps":
+            # Install dependencies
+            result = subprocess.run(
+                ["pnpm", "install"],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            results.append({
+                "action": "pnpm install",
+                "success": result.returncode == 0,
+                "output": result.stdout[-1000:] if result.stdout else "",
+                "error": result.stderr[-500:] if result.stderr else ""
+            })
+        
+        elif fix_type == "clear_cache":
+            # Clear build caches
+            import shutil
+            cache_dirs = [".next/cache", "node_modules/.cache", "dist"]
+            for cache_dir in cache_dirs:
+                cache_path = os.path.join(project_dir, cache_dir)
+                if os.path.exists(cache_path):
+                    try:
+                        shutil.rmtree(cache_path)
+                        results.append({
+                            "action": f"Clear {cache_dir}",
+                            "success": True
+                        })
+                    except Exception as e:
+                        results.append({
+                            "action": f"Clear {cache_dir}",
+                            "success": False,
+                            "error": str(e)
+                        })
+        
+        elif fix_type == "check_ports":
+            # Check and report port usage
+            import socket
+            ports = [3000, 3001, 5173, 8000, 8080]
+            for port in ports:
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(0.5)
+                    result = sock.connect_ex(('localhost', port))
+                    sock.close()
+                    results.append({
+                        "action": f"Check port {port}",
+                        "success": True,
+                        "in_use": result == 0
+                    })
+                except:
+                    pass
+        
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown fix type: {fix_type}. Supported: install_deps, clear_cache, check_ports"
+            )
+        
+        return {
+            "fix_type": fix_type,
+            "environment": environment,
+            "results": results,
+            "success": all(r.get("success", False) for r in results)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Fix operation failed: {str(e)}"
+        )
+
+
+@app.get("/api/sanity/report", response_model=dict)
+async def sanity_report_endpoint(
+    environment: str = "dev",
+    format: str = "console",
+    email: str = Depends(verify_session_token)
+):
+    """
+    Generate a formatted sanity report for console output.
+    Format: console (copyable text) or json
+    """
+    try:
+        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        report = await run_sanity_check(project_dir, environment)
+        
+        if format == "json":
+            return report.to_dict()
+        
+        # Generate console-friendly output
+        lines = []
+        lines.append("=" * 60)
+        lines.append(f"🔍 SANITY CHECK REPORT - {environment.upper()}")
+        lines.append("=" * 60)
+        lines.append(f"📁 Project: {project_dir}")
+        lines.append(f"🕐 Time: {report.timestamp}")
+        lines.append("")
+        
+        # Group by category
+        from collections import defaultdict
+        by_category = defaultdict(list)
+        for check in report.checks:
+            by_category[check.category.value].append(check)
+        
+        status_icons = {
+            "pass": "✅",
+            "warn": "⚠️",
+            "fail": "❌",
+            "skip": "⏭️"
+        }
+        
+        for category, checks in by_category.items():
+            lines.append(f"\n📦 {category.upper()}")
+            lines.append("-" * 40)
+            for check in checks:
+                icon = status_icons.get(check.status.value, "❓")
+                lines.append(f"  {icon} {check.name}: {check.message}")
+                if check.details:
+                    for detail in check.details.split("\n"):
+                        lines.append(f"      {detail}")
+                if check.suggestion:
+                    lines.append(f"      💡 {check.suggestion}")
+                if check.fix_command:
+                    lines.append(f"      🔧 {check.fix_command}")
+        
+        # Summary
+        lines.append("\n" + "=" * 60)
+        lines.append("📊 SUMMARY")
+        lines.append("=" * 60)
+        lines.append(f"  ✅ Passed: {report.summary.get('pass', 0)}")
+        lines.append(f"  ⚠️ Warnings: {report.summary.get('warn', 0)}")
+        lines.append(f"  ❌ Failed: {report.summary.get('fail', 0)}")
+        lines.append(f"  ⏭️ Skipped: {report.summary.get('skip', 0)}")
+        lines.append(f"  📋 Total: {report.summary.get('total', 0)}")
+        
+        # AI Suggestions
+        if report.ai_suggestions:
+            lines.append("\n" + "=" * 60)
+            lines.append("🤖 AI SUGGESTIONS")
+            lines.append("=" * 60)
+            for suggestion in report.ai_suggestions:
+                lines.append(f"  {suggestion}")
+        
+        lines.append("\n" + "=" * 60)
+        
+        return {
+            "console_output": "\n".join(lines),
+            "summary": report.summary,
+            "ai_suggestions": report.ai_suggestions,
+            "ready_to_build": report.summary.get("fail", 0) == 0
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Report generation failed: {str(e)}"
+        )
 
 
 if __name__ == "__main__":

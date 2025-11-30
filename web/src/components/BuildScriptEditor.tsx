@@ -3,7 +3,7 @@ import {
   FileCode, Save, Play, AlertTriangle, CheckCircle, Zap, 
   Cpu, RefreshCw, Plus, Trash2, Copy,
   ChevronDown, ChevronRight, Lightbulb, Shield, Timer,
-  AlertCircle, FileText, Code2, FileJson
+  AlertCircle, FileText, Code2, FileJson, Settings, Lock
 } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../services/api'
@@ -427,11 +427,16 @@ export default function BuildScriptEditor() {
   const [environment, setEnvironment] = useState<'dev' | 'prod'>('dev')
   
   // MJS file state
-  const [editorMode, setEditorMode] = useState<'scripts' | 'mjs'>('scripts')
+  const [editorMode, setEditorMode] = useState<'scripts' | 'mjs' | 'env'>('scripts')
   const [selectedMjsFile, setSelectedMjsFile] = useState<MjsFile | null>(null)
   const [mjsContent, setMjsContent] = useState('')
   const [mjsAnalysis, setMjsAnalysis] = useState<MjsAnalysisResult | null>(null)
   const [isMjsEditing, setIsMjsEditing] = useState(false)
+  
+  // ENV file state
+  const [selectedEnvFile, setSelectedEnvFile] = useState<{ name: string; path: string } | null>(null)
+  const [envContent, setEnvContent] = useState('')
+  const [isEnvEditing, setIsEnvEditing] = useState(false)
 
   // Fetch available scripts
   const { data: scriptsData, isLoading: scriptsLoading } = useQuery({
@@ -517,6 +522,44 @@ export default function BuildScriptEditor() {
       setIsMjsEditing(false)
     }
   })
+
+  // Fetch ENV files
+  const { data: envFilesData, isLoading: envLoading } = useQuery({
+    queryKey: ['env-files', environment],
+    queryFn: async () => {
+      const response = await api.get('/build/scripts/env', {
+        params: { environment }
+      })
+      return response.data
+    }
+  })
+
+  // Save ENV file mutation
+  const saveEnvMutation = useMutation({
+    mutationFn: async (data: { path: string; content: string }) => {
+      const response = await api.post('/build/scripts/env/save', data)
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['env-files'] })
+      setIsEnvEditing(false)
+    }
+  })
+
+  // Handle ENV file selection
+  const handleSelectEnvFile = useCallback(async (file: { name: string; path: string }) => {
+    setSelectedEnvFile(file)
+    setIsEnvEditing(false)
+    try {
+      const response = await api.get('/build/scripts/env/content', {
+        params: { path: file.path }
+      })
+      setEnvContent(response.data.content || '')
+    } catch (error) {
+      console.error('Failed to load ENV file:', error)
+      setEnvContent('# Failed to load file content')
+    }
+  }, [])
 
   // Analyze script when editing
   useEffect(() => {
@@ -636,7 +679,7 @@ export default function BuildScriptEditor() {
           </div>
         </div>
 
-        {/* Mode Toggle: Scripts vs MJS Files */}
+        {/* Mode Toggle: Scripts vs MJS Files vs ENV Files */}
         <div className="flex items-center gap-2">
           <button
             onClick={() => setEditorMode('scripts')}
@@ -658,7 +701,18 @@ export default function BuildScriptEditor() {
             }`}
           >
             <FileJson size={16} />
-            MJS Build Files
+            Config Files
+          </button>
+          <button
+            onClick={() => setEditorMode('env')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              editorMode === 'env'
+                ? 'bg-green-500 text-white'
+                : 'bg-slate-800 text-slate-400 hover:text-white'
+            }`}
+          >
+            <Settings size={16} />
+            ENV Files
           </button>
         </div>
       </div>
@@ -880,6 +934,179 @@ export default function BuildScriptEditor() {
                 <h3 className="text-xl font-semibold text-white mb-2">Select an MJS File</h3>
                 <p className="text-slate-400">
                   Choose a .mjs build script from the list to view, edit, and analyze it
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ENV Files Mode */}
+      {editorMode === 'env' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* ENV File List */}
+          <div className="lg:col-span-1 space-y-4">
+            <div className="bg-slate-800/50 rounded-xl p-4 border border-green-500/30">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <Lock size={18} className="text-green-400" />
+                  Environment Files
+                </h3>
+                <span className="text-xs text-slate-400">
+                  {envFilesData?.count || 0} files
+                </span>
+              </div>
+              
+              {envLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw className="animate-spin text-green-400" size={24} />
+                </div>
+              ) : envFilesData?.files?.length > 0 ? (
+                <div className="space-y-2">
+                  {envFilesData.files.map((file: { name: string; path: string; size: number; modified: string }) => (
+                    <button
+                      key={file.path}
+                      onClick={() => handleSelectEnvFile(file)}
+                      className={`w-full text-left p-3 rounded-lg transition-colors ${
+                        selectedEnvFile?.path === file.path
+                          ? 'bg-green-500/20 border border-green-500/50'
+                          : 'bg-white/5 hover:bg-white/10 border border-transparent'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Settings size={14} className="text-green-400" />
+                        <span className="text-white font-medium text-sm">{file.name}</span>
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">
+                        {(file.size / 1024).toFixed(1)} KB • {new Date(file.modified).toLocaleDateString()}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-slate-400">
+                  <Settings className="mx-auto mb-2 opacity-50" size={32} />
+                  <p className="text-sm">No .env files found</p>
+                  <p className="text-xs mt-1">Create a .env file in your project root</p>
+                </div>
+              )}
+            </div>
+            
+            {/* Security Notice */}
+            <div className="bg-yellow-500/10 rounded-xl p-4 border border-yellow-500/30">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="text-yellow-400 flex-shrink-0 mt-0.5" size={18} />
+                <div>
+                  <h4 className="text-sm font-medium text-yellow-400">Security Notice</h4>
+                  <p className="text-xs text-slate-400 mt-1">
+                    ENV files contain sensitive data. Never commit them to version control. 
+                    Changes are backed up before saving.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ENV Editor */}
+          <div className="lg:col-span-2 space-y-4">
+            {selectedEnvFile ? (
+              <>
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-green-500/30">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                      <Settings size={18} className="text-green-400" />
+                      {selectedEnvFile.name}
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      {isEnvEditing ? (
+                        <>
+                          <button
+                            onClick={() => setIsEnvEditing(false)}
+                            className="px-3 py-1.5 text-sm text-slate-400 hover:text-white transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (selectedEnvFile) {
+                                saveEnvMutation.mutate({
+                                  path: selectedEnvFile.path,
+                                  content: envContent
+                                })
+                              }
+                            }}
+                            disabled={saveEnvMutation.isPending}
+                            className="flex items-center gap-2 px-4 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                          >
+                            <Save size={14} />
+                            {saveEnvMutation.isPending ? 'Saving...' : 'Save'}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(envContent)
+                            }}
+                            className="p-2 text-slate-400 hover:text-white transition-colors"
+                            title="Copy to clipboard"
+                          >
+                            <Copy size={16} />
+                          </button>
+                          <button
+                            onClick={() => setIsEnvEditing(true)}
+                            className="flex items-center gap-2 px-4 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors"
+                          >
+                            <Code2 size={14} />
+                            Edit
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <textarea
+                    value={envContent}
+                    onChange={(e) => setEnvContent(e.target.value)}
+                    readOnly={!isEnvEditing}
+                    className={`w-full h-96 bg-slate-900 text-green-400 font-mono text-sm p-4 rounded-lg border ${
+                      isEnvEditing ? 'border-green-500' : 'border-slate-700'
+                    } focus:outline-none focus:border-green-500 resize-none`}
+                    placeholder="# Environment variables will appear here..."
+                    spellCheck={false}
+                  />
+                </div>
+
+                {/* ENV Variables Preview */}
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+                  <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+                    <Zap size={14} className="text-yellow-400" />
+                    Variables Preview
+                  </h3>
+                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {envContent.split('\n').filter((line: string) => line.trim() && !line.trim().startsWith('#')).map((line: string, idx: number) => {
+                      const [key, ...valueParts] = line.split('=')
+                      const value = valueParts.join('=')
+                      return (
+                        <div key={idx} className="flex items-center gap-2 text-xs font-mono">
+                          <span className="text-blue-400">{key?.trim()}</span>
+                          <span className="text-slate-500">=</span>
+                          <span className="text-green-400 truncate">{value?.trim() || '(empty)'}</span>
+                        </div>
+                      )
+                    })}
+                    {envContent.split('\n').filter((line: string) => line.trim() && !line.trim().startsWith('#')).length === 0 && (
+                      <p className="text-slate-500 text-xs">No variables defined</p>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="bg-slate-800/50 rounded-xl p-8 border border-green-500/30 text-center">
+                <Settings className="mx-auto text-slate-500 mb-4" size={48} />
+                <h3 className="text-xl font-semibold text-white mb-2">Select an ENV File</h3>
+                <p className="text-slate-400">
+                  Choose an environment file from the list to view and edit it
                 </p>
               </div>
             )}

@@ -15,9 +15,78 @@ from enum import Enum
 from dataclasses import dataclass
 import asyncio
 from config import settings
-from models import BuildConfig, BuildStatus, BuildStatusResponse
+from models import BuildConfig, BuildStatus, BuildStatusResponse, ProjectType
 from email_service import send_build_started_email, send_build_completed_email, send_build_stalled_email
 from system_metrics import clear_workers
+
+
+def detect_project_type(project_dir: str) -> str:
+    """Auto-detect project type from package.json"""
+    package_json_path = Path(project_dir) / "package.json"
+    
+    if not package_json_path.exists():
+        return "unknown"
+    
+    try:
+        with open(package_json_path, 'r', encoding='utf-8') as f:
+            package_data = json.load(f)
+        
+        deps = package_data.get("dependencies", {})
+        dev_deps = package_data.get("devDependencies", {})
+        all_deps = {**deps, **dev_deps}
+        scripts = package_data.get("scripts", {})
+        
+        # Check for Vite
+        has_vite = "vite" in all_deps
+        # Check for React
+        has_react = "react" in all_deps
+        # Check for Express
+        has_express = "express" in all_deps
+        # Check for Next.js
+        has_nextjs = "next" in all_deps
+        
+        # Check scripts for hints
+        has_vite_scripts = any("vite" in str(v).lower() for v in scripts.values())
+        has_next_scripts = any("next" in str(v).lower() for v in scripts.values())
+        
+        if has_nextjs or has_next_scripts:
+            return "nextjs"
+        elif has_vite or has_vite_scripts:
+            if has_express:
+                return "vite-express"
+            elif has_react:
+                return "vite-react"
+            else:
+                return "vite-react"  # Default Vite to React
+        elif has_express:
+            return "express"
+        else:
+            return "unknown"
+    except Exception as e:
+        print(f"[BUILD] Error detecting project type: {e}")
+        return "unknown"
+
+
+def get_vite_build_command(config: BuildConfig, project_type: str, build_target: str) -> tuple:
+    """Get the appropriate build command for Vite projects"""
+    # Determine if building for development or production
+    is_production = build_target == "production"
+    
+    if project_type == "vite-express":
+        # Vite + Express: Build both frontend and backend
+        if is_production:
+            return ("pnpm", ["run", "build:prod"])
+        else:
+            return ("pnpm", ["run", "build"])
+    elif project_type == "vite-react":
+        # Pure Vite React
+        if is_production:
+            return ("pnpm", ["run", "build", "--", "--mode", "production"])
+        else:
+            return ("pnpm", ["run", "build", "--", "--mode", "development"])
+    else:
+        # Fallback
+        return ("pnpm", ["run", "build"])
 
 
 # In-memory build storage (in production, use SQLite)
@@ -119,13 +188,38 @@ def is_build_successful(output: str, exit_code: int) -> bool:
         return False
     
     success_indicators = [
+        # Next.js indicators
         'Server build and restart completed!',
         'BUILD COMPLETED SUCCESSFULLY',
         'BUILD_COMPLETED created',
-        'Build completed successfully'
+        'Build completed successfully',
+        # Vite indicators
+        'vite build',
+        'built in',
+        'dist/',
+        '✓ built in',
+        'Build successful',
+        # Express indicators
+        'Server compiled successfully',
+        'tsc -p',
     ]
     
-    return any(indicator in output for indicator in success_indicators)
+    # Check for success indicators
+    has_success = any(indicator in output for indicator in success_indicators)
+    
+    # Also check for no error indicators
+    error_indicators = [
+        'Build error',
+        'Failed to compile',
+        'FATAL ERROR',
+        'Error:',
+        'error TS',
+        'SyntaxError',
+    ]
+    
+    has_errors = any(indicator in output for indicator in error_indicators)
+    
+    return has_success or (exit_code == 0 and not has_errors)
 
 
 def extract_errors(output: str) -> List[str]:
@@ -140,6 +234,18 @@ def extract_errors(output: str) -> List[str]:
         
         # Next.js specific errors
         if 'Build error' in line or 'Failed to compile' in line:
+            errors.append(line)
+        
+        # Vite specific errors
+        if 'error during build' in line.lower() or '[vite]' in line.lower() and 'error' in line.lower():
+            errors.append(line)
+        
+        # TypeScript errors
+        if 'error TS' in line or 'TypeError:' in line:
+            errors.append(line)
+        
+        # ESLint errors
+        if 'eslint' in line.lower() and 'error' in line.lower():
             errors.append(line)
         
         # Memory errors
@@ -350,47 +456,139 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
         env = os.environ.copy()
         env["BUILD_ID"] = build_id
         
-        # Determine build script based on build mode
+        # Determine build mode
         build_mode = config.build_mode.value if hasattr(config.build_mode, 'value') else str(config.build_mode)
         
-        # Map build mode to build script
-        build_script_map = {
-            "quick": "build:quick",
-            "full": "build:server",
-            "phased": "build:phased",
-            "phased-prod": "build:phased:prod",
-            "clean": "build:clean",
-            "ram-optimized": "build:server"
-        }
+        # Determine build target (development or production)
+        build_target = config.build_target or "development"
+        env["BUILD_TARGET"] = build_target
+        env["NODE_ENV"] = "production" if build_target == "production" else "development"
         
-        build_script = build_script_map.get(build_mode, "build:server")
+        # Detect or use specified project type
+        project_type_value = config.project_type.value if hasattr(config.project_type, 'value') else str(config.project_type)
+        if project_type_value == "auto":
+            detected_type = detect_project_type(working_dir)
+            project_type = detected_type
+        else:
+            project_type = project_type_value
         
-        # Set environment variables based on build mode
-        if build_mode == "quick":
-            env["BUILD_MODE"] = "quick"
-            env["SKIP_DEPS"] = "true"
-            env["SKIP_PM2"] = "true"
-            env["SKIP_REDIS"] = "true"
-        elif build_mode == "clean":
-            env["BUILD_MODE"] = "full"
-            env["FORCE_CLEAN"] = "true"
-        elif build_mode == "phased":
-            env["BUILD_MODE"] = "phased"
-        elif build_mode == "phased-prod":
-            env["BUILD_MODE"] = "phased"
-            env["SKIP_DEPS"] = "false"
-            env["TEST_DATABASE"] = "true"
-            env["TEST_REDIS"] = "true"
-        else:  # full, ram-optimized
-            env["BUILD_MODE"] = "full"
+        env["PROJECT_TYPE"] = project_type
+        
+        # Determine build command based on project type
+        if project_type in ["vite-react", "vite-express"]:
+            # Vite-based project
+            build_cmd, build_args = get_vite_build_command(config, project_type, build_target)
+            build_script = " ".join(build_args)
+            
+            # Vite-specific environment variables
+            if config.vite_mode:
+                env["VITE_MODE"] = config.vite_mode
+            
+            # Vite build options
+            env["VITE_MINIFY"] = "true" if config.vite_minify else "false"
+            env["VITE_LEGACY"] = "true" if config.vite_legacy else "false"
+            env["VITE_SSR"] = "true" if config.vite_ssr else "false"
+            env["VITE_MANIFEST"] = "true" if config.vite_manifest else "false"
+            env["VITE_CSS_CODE_SPLIT"] = "true" if config.vite_css_code_split else "false"
+            env["VITE_SOURCEMAP"] = "true" if config.vite_sourcemap else "false"
+            env["VITE_REPORT_SIZE"] = "true" if config.vite_report_size else "false"
+            env["VITE_CHUNK_SIZE_WARNING"] = "true" if config.vite_chunk_size_warning else "false"
+            env["VITE_CHUNK_SIZE_LIMIT"] = str(config.vite_chunk_size_limit)
+            env["VITE_ASSET_INLINE_LIMIT"] = str(config.vite_asset_inline_limit * 1024)  # Convert KB to bytes
+            env["VITE_TARGET"] = config.vite_target
+            env["VITE_MINIFIER"] = config.vite_minifier
+            
+            # For Vite+Express, handle backend build
+            if project_type == "vite-express" and config.express_build:
+                env["BUILD_EXPRESS"] = "true"
+                env["EXPRESS_TYPESCRIPT"] = "true" if config.express_typescript else "false"
+                env["EXPRESS_BUNDLE"] = "true" if config.express_bundle else "false"
+                env["EXPRESS_SOURCEMAP"] = "true" if config.express_sourcemap else "false"
+                env["EXPRESS_MINIFY"] = "true" if config.express_minify else "false"
+                env["EXPRESS_COPY_ASSETS"] = "true" if config.express_copy_assets else "false"
+                env["EXPRESS_NODE_TARGET"] = config.express_node_target
+                env["EXPRESS_MODULE_FORMAT"] = config.express_module_format
+                env["EXPRESS_OUT_DIR"] = config.express_out_dir
+                env["EXPRESS_ENTRY"] = config.express_entry
+            
+            # Vite memory settings
+            if config.max_old_space_size and config.max_old_space_size > 0:
+                env["NODE_OPTIONS"] = f"--max-old-space-size={config.max_old_space_size}"
+        
+        elif project_type == "express":
+            # Express-only project
+            build_cmd = "pnpm"
+            build_args = ["run", "build"]
+            build_script = "build"
+            
+            # Express build options
+            env["EXPRESS_TYPESCRIPT"] = "true" if config.express_typescript else "false"
+            env["EXPRESS_BUNDLE"] = "true" if config.express_bundle else "false"
+            env["EXPRESS_SOURCEMAP"] = "true" if config.express_sourcemap else "false"
+            env["EXPRESS_MINIFY"] = "true" if config.express_minify else "false"
+            env["EXPRESS_COPY_ASSETS"] = "true" if config.express_copy_assets else "false"
+            env["EXPRESS_NODE_TARGET"] = config.express_node_target
+            env["EXPRESS_MODULE_FORMAT"] = config.express_module_format
+            env["EXPRESS_OUT_DIR"] = config.express_out_dir
+            env["EXPRESS_ENTRY"] = config.express_entry
+            
+            if config.max_old_space_size and config.max_old_space_size > 0:
+                env["NODE_OPTIONS"] = f"--max-old-space-size={config.max_old_space_size}"
+        
+        else:
+            # Next.js or other project - use existing logic
+            # Map build mode to build script
+            build_script_map = {
+                "quick": "build:quick",
+                "full": "build:server",
+                "phased": "build:phased",
+                "phased-prod": "build:phased:prod",
+                "clean": "build:clean",
+                "ram-optimized": "build:server"
+            }
+            
+            build_script = build_script_map.get(build_mode, "build:server")
+            build_cmd = "pnpm"
+            build_args = ["run", build_script]
+            
+            # Next.js specific build options
+            env["NEXT_STANDALONE"] = "true" if config.next_standalone else "false"
+            env["NEXT_EXPORT"] = "true" if config.next_export else "false"
+            env["NEXT_SWC_MINIFY"] = "true" if config.next_swc_minify else "false"
+            env["NEXT_IMAGE_OPTIMIZATION"] = "true" if config.next_image_optimization else "false"
+            env["NEXT_BUNDLE_ANALYZER"] = "true" if config.next_bundle_analyzer else "false"
+            env["NEXT_MODULARIZE_IMPORTS"] = "true" if config.next_modularize_imports else "false"
+            env["NEXT_OUTPUT"] = config.next_output
+            env["NEXT_IMAGE_FORMATS"] = config.next_image_formats
+            env["NEXT_COMPILER"] = config.next_compiler
+            env["NEXT_REACT_COMPILER"] = config.next_react_compiler
+            
+            # Set environment variables based on build mode
+            if build_mode == "quick":
+                env["BUILD_MODE"] = "quick"
+                env["SKIP_DEPS"] = "true"
+                env["SKIP_PM2"] = "true"
+                env["SKIP_REDIS"] = "true"
+            elif build_mode == "clean":
+                env["BUILD_MODE"] = "full"
+                env["FORCE_CLEAN"] = "true"
+            elif build_mode == "phased":
+                env["BUILD_MODE"] = "phased"
+            elif build_mode == "phased-prod":
+                env["BUILD_MODE"] = "phased"
+                env["SKIP_DEPS"] = "false"
+                env["TEST_DATABASE"] = "true"
+                env["TEST_REDIS"] = "true"
+            else:  # full, ram-optimized
+                env["BUILD_MODE"] = "full"
         
         # Skip dependencies installation (only if not already set)
         if "SKIP_DEPS" not in env:
             env["SKIP_DEPS"] = "true" if config.skip_deps else "false"
         
-        # Clear .next cache before build
+        # Clear cache before build (works for both .next and dist)
         if "FORCE_CLEAN" not in env:
-            env["FORCE_CLEAN"] = "false" if config.force_clean else "true"
+            env["FORCE_CLEAN"] = "true" if config.force_clean else "false"
         
         # Quick build (skip static generation)
         env["QUICK_BUILD"] = "true" if build_mode == "quick" else "false"
@@ -406,27 +604,26 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
         if workers and workers > 0:
             env["BUILD_WORKERS"] = str(workers)
         
-        # Build script is already determined above
-        
-        # Run the selected build script
+        # Run the build
         with open(log_path, "w", encoding='utf-8', errors='replace') as log_file:
             # Write initial header
             log_file.write(f"[BUILD] BuildMaster Build Started\n")
             log_file.write(f"[INFO] Build ID: {build_id}\n")
-            log_file.write(f"[INFO] Build Script: pnpm run {build_script}\n")
+            log_file.write(f"[INFO] Project Type: {project_type}\n")
+            log_file.write(f"[INFO] Build Target: {build_target}\n")
+            log_file.write(f"[INFO] Build Command: {build_cmd} {' '.join(build_args)}\n")
             log_file.write(f"[INFO] Mode: {build_mode}\n")
             log_file.write(f"[INFO] Working Directory: {working_dir}\n")
+            log_file.write(f"[INFO] NODE_ENV: {env.get('NODE_ENV', 'not set')}\n")
             log_file.write(f"[INFO] Skip Deps: {env.get('SKIP_DEPS', 'false')}\n")
             log_file.write(f"[INFO] Force Clean: {env.get('FORCE_CLEAN', 'false')}\n")
-            log_file.write(f"[INFO] Test Database: {env.get('TEST_DATABASE', 'false')}\n")
-            log_file.write(f"[INFO] Test Redis: {env.get('TEST_REDIS', 'false')}\n")
             log_file.write(f"[INFO] Max Old Space: {env.get('MAX_OLD_SPACE', 'auto')}\n")
             log_file.write(f"[INFO] Workers: {env.get('BUILD_WORKERS', 'auto')}\n")
             log_file.write(f"[BUILD] ================================\n\n")
             log_file.flush()
             
             process = await asyncio.create_subprocess_exec(
-                "pnpm", "run", build_script,
+                build_cmd, *build_args,
                 cwd=working_dir,
                 env=env,
                 stdout=log_file,

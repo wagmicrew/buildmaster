@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import api from '../services/api'
-import { Loader, CheckCircle, XCircle, Clock, AlertTriangle, Zap, Settings, History, Cpu, Square, Terminal, AlertTriangle as AlertTriangleIcon, FileCode } from 'lucide-react'
+import { Loader, CheckCircle, XCircle, Clock, AlertTriangle, Zap, Settings, History, Cpu, Square, Terminal, AlertTriangle as AlertTriangleIcon, FileCode, Shield } from 'lucide-react'
 import BuildProgress from '../components/BuildProgress'
 import BuildConfigTab from '../components/BuildConfigTab'
 import BuildHistoryTab from '../components/BuildHistoryTab'
@@ -9,8 +9,9 @@ import BuildScriptEditor from '../components/BuildScriptEditor'
 import SystemMetricsPanel from '../components/SystemMetricsPanel'
 import WorkerAccordion from '../components/WorkerAccordion'
 import ConsoleModal from '../components/ConsoleModal'
+import SanityChecker from '../components/SanityChecker'
 
-type TabType = 'config' | 'history' | 'active' | 'logs' | 'scripts'
+type TabType = 'config' | 'history' | 'active' | 'logs' | 'scripts' | 'sanity'
 
 export default function Build() {
   const [activeTab, setActiveTab] = useState<TabType>('config')
@@ -26,6 +27,9 @@ export default function Build() {
     max_semi_space_size: 256, // Default to 256MB semi-space
     // Build mode maps directly to backend BuildMode enum values
     build_mode: 'full' as 'quick' | 'full' | 'phased' | 'phased-prod' | 'clean' | 'ram-optimized',
+    // Project type and build target
+    project_type: 'auto' as 'auto' | 'nextjs' | 'vite-react' | 'vite-express' | 'express',
+    build_target: 'development' as 'development' | 'production',
     test_database: true,
     test_redis: true,
     skip_deps: false,
@@ -43,6 +47,42 @@ export default function Build() {
     optimize_images: false,
     remove_console_logs: false,
     experimental_turbo: false,
+    // Vite-specific options
+    vite_mode: null as string | null,
+    express_build: true,
+    vite_minify: true,
+    vite_legacy: false,
+    vite_ssr: false,
+    vite_manifest: true,
+    vite_css_code_split: true,
+    vite_sourcemap: false,
+    vite_report_size: false,
+    vite_chunk_size_warning: true,
+    vite_chunk_size_limit: 500,
+    vite_asset_inline_limit: 4,
+    vite_target: 'esnext',
+    vite_minifier: 'esbuild',
+    // Next.js specific options
+    next_standalone: true,
+    next_export: false,
+    next_swc_minify: true,
+    next_image_optimization: true,
+    next_bundle_analyzer: false,
+    next_modularize_imports: true,
+    next_output: 'standalone',
+    next_image_formats: 'webp',
+    next_compiler: 'swc',
+    next_react_compiler: 'disabled',
+    // Express specific options
+    express_typescript: true,
+    express_bundle: false,
+    express_sourcemap: true,
+    express_minify: false,
+    express_copy_assets: true,
+    express_node_target: 'node18',
+    express_module_format: 'esm',
+    express_out_dir: 'dist',
+    express_entry: 'src/index.ts',
   })
 
   // Fetch system metrics to optimize defaults
@@ -75,7 +115,7 @@ export default function Build() {
       else if (totalMemoryMB >= 16384) optimalMemory = 8192  // 8GB for 16GB+ RAM
       else if (totalMemoryMB >= 8192) optimalMemory = 4096   // 4GB for 8GB+ RAM
 
-      setConfig(prev => ({
+      setConfig((prev: typeof config) => ({
         ...prev,
         workers: prev.workers === 4 ? optimalWorkers : prev.workers, // Only update if still default
         max_old_space_size: prev.max_old_space_size === 8192 ? optimalMemory : prev.max_old_space_size, // Only update if still default
@@ -86,6 +126,7 @@ export default function Build() {
   const tabs = [
     { id: 'config' as TabType, label: 'Configuration', icon: Settings },
     { id: 'scripts' as TabType, label: 'Scripts', icon: FileCode },
+    { id: 'sanity' as TabType, label: 'Sanity Check', icon: Shield },
     { id: 'history' as TabType, label: 'History', icon: History },
     { id: 'active' as TabType, label: 'Active Build', icon: Cpu },
     { id: 'logs' as TabType, label: 'Logs', icon: Clock },
@@ -273,6 +314,9 @@ export default function Build() {
 
           {/* Scripts Tab */}
           {activeTab === 'scripts' && <BuildScriptEditor />}
+
+          {/* Sanity Check Tab */}
+          {activeTab === 'sanity' && <SanityChecker />}
 
           {/* History Tab */}
           {activeTab === 'history' && <BuildHistoryTab />}

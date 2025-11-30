@@ -25,6 +25,15 @@ class BuildMode(str, Enum):
     RAM_OPTIMIZED = "ram-optimized"
 
 
+class ProjectType(str, Enum):
+    """Project type enumeration"""
+    NEXTJS = "nextjs"
+    VITE_REACT = "vite-react"
+    VITE_EXPRESS = "vite-express"
+    EXPRESS = "express"
+    AUTO = "auto"  # Auto-detect based on package.json
+
+
 # Authentication Models
 class OTPRequest(BaseModel):
     """Request OTP model"""
@@ -79,6 +88,8 @@ class BuildConfig(BaseModel):
     max_semi_space_size: Optional[int] = Field(None, ge=0, le=4096)
     build_mode: BuildMode = BuildMode.FULL
     build_type: Optional[str] = Field('development', description="Build type: development or production")
+    project_type: ProjectType = ProjectType.AUTO  # Auto-detect or specify framework
+    build_target: Optional[str] = Field('development', description="Build target: development or production")
     test_database: bool = True
     test_redis: bool = True
     skip_deps: bool = False
@@ -97,6 +108,42 @@ class BuildConfig(BaseModel):
     optimize_images: bool = False
     remove_console_logs: bool = False
     experimental_turbo: bool = False
+    # Vite-specific options
+    vite_mode: Optional[str] = Field(None, description="Vite build mode override")
+    express_build: bool = True  # Build Express backend for Vite+Express projects
+    vite_minify: bool = True
+    vite_legacy: bool = False
+    vite_ssr: bool = False
+    vite_manifest: bool = True
+    vite_css_code_split: bool = True
+    vite_sourcemap: bool = False
+    vite_report_size: bool = False
+    vite_chunk_size_warning: bool = True
+    vite_chunk_size_limit: int = 500
+    vite_asset_inline_limit: int = 4
+    vite_target: str = "esnext"
+    vite_minifier: str = "esbuild"
+    # Next.js specific options
+    next_standalone: bool = True
+    next_export: bool = False
+    next_swc_minify: bool = True
+    next_image_optimization: bool = True
+    next_bundle_analyzer: bool = False
+    next_modularize_imports: bool = True
+    next_output: str = "standalone"
+    next_image_formats: str = "webp"
+    next_compiler: str = "swc"
+    next_react_compiler: str = "disabled"
+    # Express specific options
+    express_typescript: bool = True
+    express_bundle: bool = False
+    express_sourcemap: bool = True
+    express_minify: bool = False
+    express_copy_assets: bool = True
+    express_node_target: str = "node18"
+    express_module_format: str = "esm"
+    express_out_dir: str = "dist"
+    express_entry: str = "src/index.ts"
 
 
 class BuildStartRequest(BaseModel):
