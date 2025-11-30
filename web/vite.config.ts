@@ -6,11 +6,34 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
-    host: true
+    host: true,
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8889',
+        changeOrigin: true,
+        secure: false
+      }
+    }
   },
   build: {
     outDir: 'build',
-    sourcemap: false
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: undefined
+      }
+    }
+  },
+  preview: {
+    port: 3000,
+    host: true,
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8889',
+        changeOrigin: true,
+        secure: false
+      }
+    }
   }
 })
 
