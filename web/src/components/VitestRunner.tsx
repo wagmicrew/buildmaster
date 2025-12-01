@@ -98,6 +98,8 @@ const VitestRunner: React.FC = () => {
       console.error('Error running tests:', error)
     } finally {
       setIsRunning(false)
+      // Keep console visible after tests complete
+      setShowConsole(true)
     }
   }
 
@@ -201,10 +203,93 @@ const VitestRunner: React.FC = () => {
 
   return (
     <div className="p-6 space-y-6 bg-gradient-to-br from-slate-50 to-blue-50 min-h-screen">
+      {/* Test Running Status Banner */}
+      {isRunning && (
+        <div className="bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-2xl shadow-lg p-4 animate-pulse">
+          <div className="flex items-center justify-center space-x-3">
+            <Loader2 className="w-6 h-6 animate-spin" />
+            <span className="text-lg font-semibold">Tests Running...</span>
+            <div className="flex space-x-1">
+              <div className="w-2 h-2 bg-white rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+              <div className="w-2 h-2 bg-white rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+              <div className="w-2 h-2 bg-white rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Console Output - Now at top, only shows when running or has results */}
+      {(showConsole && runResult) && (
+        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100 transform transition-all duration-500 ease-in-out">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold flex items-center text-gray-900">
+              <Terminal className="w-5 h-5 mr-2 text-purple-500" />
+              Console Output
+              {runResult.test_file && (
+                <span className="ml-2 text-sm text-gray-600">
+                  - {runResult.test_file}
+                  {runResult.test_name && ` (${runResult.test_name})`}
+                </span>
+              )}
+            </h3>
+            <div className="flex items-center space-x-2">
+              <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                runResult.success 
+                  ? 'bg-green-100 text-green-700' 
+                  : 'bg-red-100 text-red-700'
+              }`}>
+                {runResult.success ? (
+                  <><CheckCircle className="w-4 h-4 inline mr-1" /> PASSED</>
+                ) : (
+                  <><XCircle className="w-4 h-4 inline mr-1" /> FAILED</>
+                )}
+              </span>
+              <button
+                onClick={() => copyToClipboard(runResult.console_output.join('\n'))}
+                className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setShowConsole(false)}
+                className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+              >
+                <XCircle className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          
+          <div className="bg-gray-900 text-gray-300 p-4 rounded-lg font-mono text-sm overflow-x-auto max-h-96 overflow-y-auto">
+            <div className="mb-2 text-gray-500 border-b border-gray-700 pb-2">
+              Duration: {runResult.duration_seconds}s | Exit Code: {runResult.exit_code}
+            </div>
+            {runResult.console_output.map((line: string, index: number) => {
+              let lineClass = 'text-gray-300'
+              if (line.includes('✓')) lineClass = 'text-green-400'
+              if (line.includes('✗')) lineClass = 'text-red-400'
+              if (line.includes('⚠️')) lineClass = 'text-yellow-400'
+              if (line.includes('Error:')) lineClass = 'text-red-500 font-semibold'
+              if (line.includes('FAIL')) lineClass = 'text-red-400 font-semibold'
+              if (line.includes('PASS')) lineClass = 'text-green-400 font-semibold'
+              
+              return (
+                <div key={index} className={`whitespace-pre-wrap ${lineClass}`}>
+                  {line}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between bg-white rounded-2xl shadow-lg p-6 border border-blue-100">
         <div className="flex items-center space-x-4">
-          <div className="p-3 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl shadow-lg">
+          <div className={`p-3 rounded-xl shadow-lg transition-all duration-300 ${
+            isRunning 
+              ? 'bg-gradient-to-br from-orange-500 to-red-600 animate-pulse' 
+              : 'bg-gradient-to-br from-blue-500 to-purple-600'
+          }`}>
             <Activity className="w-6 h-6 text-white" />
           </div>
           <div>
@@ -221,7 +306,7 @@ const VitestRunner: React.FC = () => {
               onClick={() => setEnvironment('dev')}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
                 environment === 'dev' 
-                  ? 'bg-blue-500 text-white shadow-md' 
+                  ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-md transform scale-105' 
                   : 'text-gray-600 hover:text-gray-800'
               }`}
             >
@@ -232,7 +317,7 @@ const VitestRunner: React.FC = () => {
               onClick={() => setEnvironment('prod')}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
                 environment === 'prod' 
-                  ? 'bg-purple-500 text-white shadow-md' 
+                  ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-md transform scale-105' 
                   : 'text-gray-600 hover:text-gray-800'
               }`}
             >
@@ -245,7 +330,7 @@ const VitestRunner: React.FC = () => {
           <button
             onClick={discoverTests}
             disabled={isLoading}
-            className="p-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl shadow-lg hover:shadow-xl transition-all disabled:opacity-50"
+            className="p-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl shadow-lg hover:shadow-xl transition-all disabled:opacity-50 transform hover:scale-105"
             title="Refresh test discovery"
           >
             <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -347,26 +432,33 @@ const VitestRunner: React.FC = () => {
             <button
               onClick={runAllTests}
               disabled={isRunning || !discoveryResult?.tests.length}
-              className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:shadow-lg transition-all disabled:opacity-50 flex items-center font-medium"
+              className={`px-6 py-3 rounded-xl hover:shadow-lg transition-all disabled:opacity-50 flex items-center font-medium transform hover:scale-105 ${
+                isRunning 
+                  ? 'bg-gradient-to-r from-orange-500 to-red-600 text-white animate-pulse' 
+                  : 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:shadow-xl'
+              }`}
             >
               {isRunning ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Running...</>
               ) : (
-                <Play className="w-4 h-4 mr-2" />
+                <><Play className="w-4 h-4 mr-2" /> Run All Tests</>
               )}
-              Run All Tests
             </button>
             <button
               onClick={getReport}
               disabled={isLoading}
-              className="px-4 py-3 border border-gray-300 rounded-xl hover:bg-gray-50 disabled:opacity-50 flex items-center font-medium"
+              className="px-4 py-3 bg-gradient-to-r from-indigo-500 to-blue-600 text-white rounded-xl hover:shadow-lg transition-all disabled:opacity-50 flex items-center font-medium transform hover:scale-105"
             >
-              {copied ? <CheckCircle className="w-4 h-4 mr-2 text-green-500" /> : <Copy className="w-4 h-4 mr-2" />}
+              {copied ? <CheckCircle className="w-4 h-4 mr-2 text-green-300" /> : <Copy className="w-4 h-4 mr-2" />}
               {copied ? 'Copied!' : 'Copy Report'}
             </button>
             <button
               onClick={() => setShowConsole(!showConsole)}
-              className="px-4 py-3 border border-gray-300 rounded-xl hover:bg-gray-50 flex items-center font-medium"
+              className={`px-4 py-3 rounded-xl hover:shadow-lg transition-all flex items-center font-medium transform hover:scale-105 ${
+                showConsole 
+                  ? 'bg-gradient-to-r from-purple-500 to-pink-600 text-white' 
+                  : 'bg-gradient-to-r from-gray-500 to-gray-600 text-white'
+              }`}
             >
               <Terminal className="w-4 h-4 mr-2" />
               {showConsole ? 'Hide' : 'Show'} Console
@@ -436,7 +528,7 @@ const VitestRunner: React.FC = () => {
                         e.stopPropagation()
                         openTestEditor(test)
                       }}
-                      className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                      className="p-2 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-lg hover:shadow-lg transition-all transform hover:scale-110"
                       title="Edit test file"
                     >
                       <Edit className="w-4 h-4" />
@@ -448,7 +540,11 @@ const VitestRunner: React.FC = () => {
                         runTests(test.file)
                       }}
                       disabled={isRunning}
-                      className="p-2 text-gray-600 hover:text-green-600 hover:bg-green-50 rounded-lg transition-all disabled:opacity-50"
+                      className={`p-2 rounded-lg transition-all transform hover:scale-110 ${
+                        isRunning
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-gradient-to-r from-green-500 to-emerald-600 text-white hover:shadow-lg'
+                      }`}
                       title="Run test"
                     >
                       <Play className="w-4 h-4" />
@@ -469,10 +565,14 @@ const VitestRunner: React.FC = () => {
                             runTests(test.file, testName)
                           }}
                           disabled={isRunning}
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 rounded-lg disabled:opacity-50 flex items-center justify-between group transition-all text-gray-700"
+                          className={`w-full text-left px-3 py-2 text-sm rounded-lg disabled:opacity-50 flex items-center justify-between group transition-all transform hover:scale-[1.02] ${
+                            isRunning
+                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                              : 'bg-gradient-to-r from-gray-50 to-gray-100 text-gray-700 hover:from-blue-50 hover:to-purple-50 hover:text-gray-900 hover:shadow-md'
+                          }`}
                         >
                           <span className="font-medium">{testName}</span>
-                          <Play className="w-3 h-3 opacity-0 group-hover:opacity-100 text-blue-500" />
+                          <Play className="w-3 h-3 opacity-0 group-hover:opacity-100 text-blue-500 transition-opacity" />
                         </button>
                       ))}
                     </div>
@@ -572,30 +672,69 @@ const VitestRunner: React.FC = () => {
 
       {/* Test File Editor Modal */}
       {showEditor && editingTest && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between p-6 border-b">
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-[90vw] h-[85vh] max-w-7xl flex flex-col transform transition-all duration-300 scale-100">
+            <div className="flex items-center justify-between p-6 border-b bg-gradient-to-r from-blue-50 to-purple-50 rounded-t-2xl">
               <div className="flex items-center space-x-3">
-                <Code className="w-5 h-5 text-blue-500" />
-                <h3 className="text-lg font-semibold text-gray-900">
-                  Edit Test: {editingTest.file}
-                </h3>
+                <div className="p-2 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg">
+                  <Code className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Edit Test: {editingTest.file}
+                  </h3>
+                  <div className="flex items-center space-x-3 text-sm text-gray-600">
+                    <span>{editingTest.test_count} tests</span>
+                    <span>{(editingTest.size_bytes / 1024).toFixed(1)} KB</span>
+                    {editingTest.is_troubleshooting && (
+                      <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full">
+                        Troubleshooting
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-              <button
-                onClick={() => setShowEditor(false)}
-                className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-all"
-              >
-                <XCircle className="w-5 h-5" />
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => {
+                    // Save functionality would go here
+                    console.log('Saving test file:', editingTest.file)
+                    // In a real implementation, you'd call an API to save the file
+                    alert('Test file saved successfully!')
+                  }}
+                  className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:shadow-lg transition-all transform hover:scale-105 flex items-center font-medium"
+                >
+                  <CheckCircle className="w-4 h-4 mr-2" />
+                  Save
+                </button>
+                <button
+                  onClick={() => {
+                    // Run the test from editor
+                    runTests(editingTest.file)
+                    setShowEditor(false)
+                  }}
+                  className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:shadow-lg transition-all transform hover:scale-105 flex items-center font-medium"
+                >
+                  <Play className="w-4 h-4 mr-2" />
+                  Run Test
+                </button>
+                <button
+                  onClick={() => setShowEditor(false)}
+                  className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all transform hover:scale-110"
+                >
+                  <XCircle className="w-5 h-5" />
+                </button>
+              </div>
             </div>
             
             <div className="flex-1 p-6 overflow-hidden">
-              <div className="bg-gray-900 rounded-lg p-4 h-full overflow-auto">
+              <div className="bg-gray-900 rounded-lg p-4 h-full overflow-auto border-2 border-gray-200">
                 <textarea
                   value={testFileContent}
                   onChange={(e) => setTestFileContent(e.target.value)}
-                  className="w-full h-full bg-transparent text-gray-300 font-mono text-sm outline-none resize-none"
+                  className="w-full h-full bg-transparent text-gray-300 font-mono text-sm outline-none resize-none leading-relaxed"
                   spellCheck={false}
+                  placeholder="Edit your test code here..."
                 />
               </div>
             </div>
