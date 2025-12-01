@@ -103,7 +103,7 @@ Based on the git status, the system provides context-aware suggestions:
 ### Git Status Card
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ 🔀 Git Status                                Branch: V24     │
+│ 🔀 Git Status                                Branch: V25     │
 ├─────────────────────────────────────────────────────────────┤
 │ Status: Dirty (5 files changed)                             │
 │                                                              │
@@ -270,7 +270,7 @@ const stashMutation = useMutation({
 ```json
 {
   "status": "dirty",
-  "branch": "V24",
+  "branch": "V25",
   "modified_files": ["file1.ts", "file2.ts"],
   "untracked_files": ["temp.log"],
   "staged_files": [],
@@ -311,7 +311,7 @@ const stashMutation = useMutation({
 {
   "success": true,
   "message": "Stash applied successfully",
-  "output": "On branch V24..."
+  "output": "On branch V25..."
 }
 ```
 

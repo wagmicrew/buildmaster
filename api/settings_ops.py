@@ -3,8 +3,11 @@ import json
 import os
 import subprocess
 import asyncio
+import time
+import shutil
 from typing import Optional, Dict, Any, List
 from pathlib import Path
+from python_utils import get_python_env_with_encoding, format_python_command
 
 # Settings file path
 SETTINGS_FILE = "/var/www/build/settings.json"
@@ -175,7 +178,8 @@ async def get_server_info() -> Dict[str, Any]:
         info["npmVersion"] = result.stdout.strip()
         
         # Get Python version
-        result = subprocess.run(["python3", "--version"], capture_output=True, text=True)
+        env = get_python_env_with_encoding()
+        result = subprocess.run(["python3", "--version"], capture_output=True, text=True, env=env)
         info["pythonVersion"] = result.stdout.replace("Python ", "").strip()
         
         # Get last package update time
@@ -427,6 +431,285 @@ async def reload_nginx() -> Dict[str, Any]:
             return {"success": False, "error": result.stderr}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+async def read_nginx_config(config_path: str) -> Dict[str, Any]:
+    """Read nginx configuration file"""
+    try:
+        if not os.path.exists(config_path):
+            return {"success": False, "error": f"Config file not found: {config_path}"}
+        
+        with open(config_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        return {
+            "success": True,
+            "content": content,
+            "path": config_path
+        }
+    except PermissionError:
+        return {"success": False, "error": "Permission denied. Run with sudo or as root."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def write_nginx_config(config_path: str, content: str, backup: bool = True) -> Dict[str, Any]:
+    """Write nginx configuration file"""
+    try:
+        # Create backup if requested
+        if backup and os.path.exists(config_path):
+            backup_path = f"{config_path}.backup.{int(time.time())}"
+            shutil.copy2(config_path, backup_path)
+        
+        # Write new content
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        # Test config
+        test_result = subprocess.run(
+            ["nginx", "-t"],
+            capture_output=True,
+            text=True
+        )
+        
+        if test_result.returncode != 0:
+            # Restore backup if test fails
+            if backup and os.path.exists(backup_path):
+                shutil.copy2(backup_path, config_path)
+            return {
+                "success": False,
+                "error": f"Nginx config test failed: {test_result.stderr}",
+                "test_output": test_result.stdout
+            }
+        
+        return {
+            "success": True,
+            "message": "Config written and tested successfully",
+            "backup_path": backup_path if backup else None
+        }
+    except PermissionError:
+        return {"success": False, "error": "Permission denied. Run with sudo or as root."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def autofix_nginx_for_nextjs(
+    config_path: str,
+    server_name: str,
+    port: int,
+    pm2_process: str = None,
+    ssl_cert_path: str = None,
+    ssl_key_path: str = None,
+    enable_ssl: bool = False
+) -> Dict[str, Any]:
+    """Auto-generate Next.js optimized nginx configuration"""
+    try:
+        # Determine if PM2 process is running and get its port
+        pm2_port = port
+        if pm2_process:
+            pm2_result = await get_pm2_processes()
+            if pm2_result.get("success"):
+                for proc in pm2_result.get("processes", []):
+                    if proc.get("name") == pm2_process:
+                        # Try to extract port from PM2 env or use default
+                        # PM2 typically runs Next.js on ports 3000, 3001, etc.
+                        pm2_port = port  # Use provided port
+                        break
+        
+        # Generate Next.js optimized config
+        ssl_block = ""
+        http_redirect = ""
+        
+        if enable_ssl and ssl_cert_path and ssl_key_path:
+            ssl_block = f"""
+    # SSL Configuration
+    ssl_certificate {ssl_cert_path};
+    ssl_certificate_key {ssl_key_path};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    # HSTS
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+"""
+            http_redirect = f"""
+# HTTP to HTTPS redirect
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {server_name};
+    return 301 https://$server_name$request_uri;
+}}
+"""
+        
+        listen_directive = "listen 443 ssl http2;" if enable_ssl else "listen 80;"
+        if enable_ssl:
+            listen_directive += "\n    listen [::]:443 ssl http2;"
+        else:
+            listen_directive += "\n    listen [::]:80;"
+        
+        config = f"""# Auto-generated Next.js Nginx Configuration
+# Generated for: {server_name}
+# PM2 Process: {pm2_process or 'Not specified'}
+# Port: {pm2_port}
+
+server {{
+    {listen_directive}
+    server_name {server_name};
+{ssl_block}
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/javascript
+        application/xml+rss
+        application/json
+        application/xml
+        image/svg+xml;
+
+    # Next.js static files and assets
+    location /_next/static/ {{
+        alias /var/www/dintrafikskolax_prod/.next/static/;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }}
+
+    # Next.js standalone server proxy
+    location / {{
+        proxy_pass http://127.0.0.1:{pm2_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        
+        # Timeouts for Next.js builds and long operations
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+        
+        # Buffer settings for large responses
+        proxy_buffering on;
+        proxy_buffer_size 4k;
+        proxy_buffers 8 4k;
+        proxy_busy_buffers_size 8k;
+    }}
+
+    # API routes (if using Next.js API routes)
+    location /api/ {{
+        proxy_pass http://127.0.0.1:{pm2_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        
+        # Extended timeouts for API operations
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }}
+
+    # WebSocket support for Next.js HMR and real-time features
+    location /_next/webpack-hmr {{
+        proxy_pass http://127.0.0.1:{pm2_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+    }}
+
+    # Logging
+    access_log /var/log/nginx/{server_name}-access.log;
+    error_log /var/log/nginx/{server_name}-error.log;
+}}
+{http_redirect}
+"""
+        
+        return {
+            "success": True,
+            "config": config,
+            "message": "Next.js nginx config generated successfully"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def discover_ssl_certificates() -> Dict[str, Any]:
+    """Discover available SSL certificates (Let's Encrypt)"""
+    certificates = []
+    
+    # Check Let's Encrypt directory
+    letsencrypt_path = "/etc/letsencrypt/live"
+    if os.path.exists(letsencrypt_path):
+        for domain_dir in os.listdir(letsencrypt_path):
+            domain_path = os.path.join(letsencrypt_path, domain_dir)
+            if os.path.isdir(domain_path):
+                cert_path = os.path.join(domain_path, "fullchain.pem")
+                key_path = os.path.join(domain_path, "privkey.pem")
+                
+                if os.path.exists(cert_path) and os.path.exists(key_path):
+                    # Get certificate info
+                    try:
+                        result = subprocess.run(
+                            ["openssl", "x509", "-in", cert_path, "-noout", "-subject", "-dates"],
+                            capture_output=True,
+                            text=True,
+                            timeout=5
+                        )
+                        cert_info = {}
+                        if result.returncode == 0:
+                            for line in result.stdout.split('\n'):
+                                if 'subject=' in line:
+                                    cert_info['subject'] = line.split('subject=')[1].strip()
+                                elif 'notBefore=' in line:
+                                    cert_info['notBefore'] = line.split('notBefore=')[1].strip()
+                                elif 'notAfter=' in line:
+                                    cert_info['notAfter'] = line.split('notAfter=')[1].strip()
+                        
+                        certificates.append({
+                            "domain": domain_dir,
+                            "cert_path": cert_path,
+                            "key_path": key_path,
+                            "info": cert_info
+                        })
+                    except:
+                        certificates.append({
+                            "domain": domain_dir,
+                            "cert_path": cert_path,
+                            "key_path": key_path
+                        })
+    
+    return {
+        "success": True,
+        "certificates": certificates
+    }
 
 
 async def test_database_connection(db_settings: Dict[str, Any]) -> Dict[str, Any]:

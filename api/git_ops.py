@@ -655,7 +655,11 @@ def force_sync_to_remote(working_dir: str, branch: str = None) -> dict:
 
 
 async def pull_with_env(env: str, branch: str = None, stash: bool = False, force: bool = False) -> dict:
-    """Pull from git for a specific environment (dev or prod)"""
+    """Pull from git for a specific environment (dev or prod)
+    
+    Handles local changes by stashing or deleting them if requested.
+    Automatically handles divergent branches and merge conflicts.
+    """
     working_dir = settings.DEV_DIR if env == "dev" else settings.PROD_DIR
     
     if not os.path.exists(working_dir):
@@ -666,22 +670,24 @@ async def pull_with_env(env: str, branch: str = None, stash: bool = False, force
     
     if status.get("has_changes"):
         if force:
+            # Delete all local changes
             success, message = delete_changes(working_dir)
             if not success:
                 return {"success": False, "error": f"Failed to delete changes: {message}", "files": status.get("files", [])}
         elif stash:
+            # Stash local changes
             success, message = stash_changes(working_dir)
             if not success:
                 return {"success": False, "error": f"Failed to stash changes: {message}", "files": status.get("files", [])}
         else:
             return {
                 "success": False,
-                "error": "Local changes detected",
+                "error": "Local changes detected. Please use stash=true or force=true to proceed.",
                 "has_local_changes": True,
                 "files": status.get("files", [])
             }
     
-    # Fetch and pull
+    # Fetch latest changes
     try:
         fetch_result = subprocess.run(
             ["git", "fetch", "origin"],
@@ -705,7 +711,19 @@ async def pull_with_env(env: str, branch: str = None, stash: bool = False, force
             )
             branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "main"
         
-        # Try pull with rebase first
+        # Check if branch exists on remote
+        check_branch_result = subprocess.run(
+            ["git", "ls-remote", "--heads", "origin", branch],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if check_branch_result.returncode != 0 or not check_branch_result.stdout.strip():
+            return {"success": False, "error": f"Branch '{branch}' not found on remote"}
+        
+        # Try pull with rebase first (cleaner history)
         pull_result = subprocess.run(
             ["git", "pull", "--rebase", "origin", branch],
             cwd=working_dir,
@@ -714,32 +732,58 @@ async def pull_with_env(env: str, branch: str = None, stash: bool = False, force
             timeout=120
         )
         
-        # If rebase fails due to divergent branches, try reset to origin
+        # If rebase fails, try different strategies
         if pull_result.returncode != 0:
             error_output = pull_result.stderr or pull_result.stdout
-            if "divergent" in error_output.lower() or "need to specify" in error_output.lower():
-                # Reset to origin branch (force sync)
-                reset_result = subprocess.run(
-                    ["git", "reset", "--hard", f"origin/{branch}"],
+            
+            # If rebase conflicts or divergent branches, try merge instead
+            if "conflict" in error_output.lower() or "divergent" in error_output.lower() or "need to specify" in error_output.lower():
+                # Abort any ongoing rebase
+                subprocess.run(
+                    ["git", "rebase", "--abort"],
+                    cwd=working_dir,
+                    capture_output=True,
+                    timeout=10
+                )
+                
+                # Try merge pull
+                merge_pull_result = subprocess.run(
+                    ["git", "pull", "--no-rebase", "origin", branch],
                     cwd=working_dir,
                     capture_output=True,
                     text=True,
-                    timeout=30
+                    timeout=120
                 )
-                if reset_result.returncode != 0:
-                    return {"success": False, "error": f"Reset failed: {reset_result.stderr}"}
-                pull_result = reset_result  # Use reset result for success
+                
+                if merge_pull_result.returncode != 0:
+                    # If merge also fails and force was requested, reset to origin
+                    if force:
+                        reset_result = subprocess.run(
+                            ["git", "reset", "--hard", f"origin/{branch}"],
+                            cwd=working_dir,
+                            capture_output=True,
+                            text=True,
+                            timeout=30
+                        )
+                        if reset_result.returncode != 0:
+                            return {"success": False, "error": f"Reset failed: {reset_result.stderr}"}
+                        pull_result = reset_result
+                    else:
+                        return {"success": False, "error": f"Pull failed with conflicts. Use force=true to reset to remote state. Error: {merge_pull_result.stderr or merge_pull_result.stdout}"}
+                else:
+                    pull_result = merge_pull_result
             else:
                 return {"success": False, "error": f"Pull failed: {error_output}"}
         
         # Check what was pulled
         output = pull_result.stdout.strip()
-        already_up_to_date = "Already up to date" in output
+        already_up_to_date = "Already up to date" in output or "is up to date" in output.lower()
         
         # Get changed files
         changed_files = []
         if not already_up_to_date:
             try:
+                # Try to get diff between previous HEAD and current HEAD
                 diff_result = subprocess.run(
                     ["git", "diff", "--name-only", "HEAD@{1}", "HEAD"],
                     cwd=working_dir,
@@ -749,18 +793,32 @@ async def pull_with_env(env: str, branch: str = None, stash: bool = False, force
                 )
                 if diff_result.returncode == 0:
                     changed_files = [f for f in diff_result.stdout.strip().split("\n") if f.strip()]
+                
+                # If that didn't work, try comparing with origin
+                if not changed_files:
+                    diff_origin_result = subprocess.run(
+                        ["git", "diff", "--name-only", f"HEAD~1", "HEAD"],
+                        cwd=working_dir,
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    if diff_origin_result.returncode == 0:
+                        changed_files = [f for f in diff_origin_result.stdout.strip().split("\n") if f.strip()]
             except:
                 pass
         
         return {
             "success": True,
-            "message": "Already up to date" if already_up_to_date else f"Pulled {len(changed_files)} file(s)",
+            "message": "Already up to date" if already_up_to_date else f"Successfully pulled {len(changed_files)} file(s) from {branch}",
             "already_up_to_date": already_up_to_date,
             "changed_files": changed_files,
             "branch": branch,
             "env": env
         }
         
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Pull operation timed out"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

@@ -71,11 +71,16 @@ from settings_ops import (
     get_nginx_sites,
     restart_pm2_with_settings,
     reload_nginx,
+    read_nginx_config,
+    write_nginx_config,
+    autofix_nginx_for_nextjs,
+    discover_ssl_certificates,
     test_database_connection,
     read_env_database_settings,
     list_available_databases,
     scan_all_env_databases
 )
+from python_utils import format_python_command, get_python_env_with_encoding
 from buildmaster_ops import (
     load_buildmaster_settings,
     save_buildmaster_settings,
@@ -473,7 +478,7 @@ async def build_scripts_endpoint(
         
         all_scripts = package_data.get("scripts", {})
         
-        # Only show the main build scripts - consolidated list with V24 optimizations
+        # Only show the main build scripts - consolidated list with V25 optimizations
         main_build_scripts = {
             "build:server": {"desc": "Production build with PM2, Redis, Nginx (recommended)", "category": "production"},
             "build:prod": {"desc": "Production build (same as build:server)", "category": "production"},
@@ -627,10 +632,13 @@ async def build_scripts_create_endpoint(
         if any(s["name"] == name for s in data["scripts"]):
             raise HTTPException(status_code=400, detail=f"Script '{name}' already exists")
         
+        # Format Python commands to include UTF-8 encoding
+        formatted_command = format_python_command(command)
+        
         # Add new script
         new_script = {
             "name": name,
-            "command": command,
+            "command": formatted_command,
             "description": description,
             "category": "custom",
             "isCustom": True,
@@ -678,7 +686,9 @@ async def build_scripts_save_endpoint(
             for script in custom_data.get("scripts", []):
                 if script["name"] == name:
                     is_custom = True
-                    script["command"] = command
+                    # Format Python commands to include UTF-8 encoding
+                    formatted_command = format_python_command(command)
+                    script["command"] = formatted_command
                     script["description"] = description
                     script["updated_at"] = datetime.utcnow().isoformat()
                     script["updated_by"] = email
@@ -702,7 +712,9 @@ async def build_scripts_save_endpoint(
         if "scripts" not in package_data:
             package_data["scripts"] = {}
         
-        package_data["scripts"][name] = command
+        # Format Python commands to include UTF-8 encoding
+        formatted_command = format_python_command(command)
+        package_data["scripts"][name] = formatted_command
         
         with open(package_json_path, "w") as f:
             json.dump(package_data, f, indent=2)
@@ -902,8 +914,6 @@ async def build_scripts_mjs_endpoint(
         # Also include important config files
         config_files = [
             "next.config.js",
-            "vite.config.js", 
-            "vite.config.ts",
             "tailwind.config.js",
             "tailwind.config.ts",
             "postcss.config.js",
@@ -2348,7 +2358,8 @@ async def restore_backup_file(
         result["console_output"].append("")
         
         # Set PGPASSWORD for authentication
-        env = os.environ.copy()
+        from python_utils import get_python_env_with_encoding
+        env = get_python_env_with_encoding()
         if parsed.password:
             env["PGPASSWORD"] = parsed.password
         
@@ -3307,6 +3318,83 @@ async def nginx_reload_endpoint(
         )
 
 
+@app.get("/api/nginx/config/{config_path:path}", response_model=dict)
+async def read_nginx_config_endpoint(
+    config_path: str,
+    email: str = Depends(verify_session_token)
+):
+    """Read nginx configuration file"""
+    try:
+        result = await read_nginx_config(config_path)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/nginx/config/{config_path:path}", response_model=dict)
+async def write_nginx_config_endpoint(
+    config_path: str,
+    request: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Write nginx configuration file"""
+    try:
+        content = request.get("content", "")
+        backup = request.get("backup", True)
+        result = await write_nginx_config(config_path, content, backup)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/nginx/autofix", response_model=dict)
+async def autofix_nginx_endpoint(
+    request: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Auto-generate Next.js optimized nginx configuration"""
+    try:
+        config_path = request.get("config_path", "")
+        server_name = request.get("server_name", "")
+        port = request.get("port", 3000)
+        pm2_process = request.get("pm2_process")
+        ssl_cert_path = request.get("ssl_cert_path")
+        ssl_key_path = request.get("ssl_key_path")
+        enable_ssl = request.get("enable_ssl", False)
+        
+        result = await autofix_nginx_for_nextjs(
+            config_path, server_name, port, pm2_process,
+            ssl_cert_path, ssl_key_path, enable_ssl
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/nginx/ssl-certificates", response_model=dict)
+async def ssl_certificates_endpoint(
+    email: str = Depends(verify_session_token)
+):
+    """Discover available SSL certificates"""
+    try:
+        result = await discover_ssl_certificates()
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
 @app.post("/api/settings/database/test", response_model=dict)
 async def test_database_endpoint(
     payload: dict,
@@ -3690,7 +3778,7 @@ async def sanity_check_endpoint(
 ):
     """
     Run comprehensive sanity checks for the project.
-    Checks: System, Node, Nginx, Vite, React, Express, Build, Config, Network
+    Checks: System, Node, Nginx, React, Build, Config, Network
     """
     try:
         project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR

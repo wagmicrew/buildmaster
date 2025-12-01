@@ -3,7 +3,7 @@
 ## ✅ Completed Improvements
 
 ### 1. Git Pull Enhancements
-- ✅ **Branch Selector**: Dropdown to select any branch (V24, V23, V22, master, etc.)
+- ✅ **Branch Selector**: Dropdown to select any branch (V25, V24, V23, V22, master, etc.)
 - ✅ **Dropdown Text Color**: Fixed to white for visibility
 - ✅ **Commit Hash Option**: Checkbox to pull specific commit instead of latest
 - ✅ **Detailed Git Output**: Shows actual git changes in success message

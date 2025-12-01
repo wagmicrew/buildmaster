@@ -1178,7 +1178,8 @@ async def generate_sync_commands(source_env: str, target_env: str, options: Dict
             
             try:
                 # Set PGPASSWORD for both source and target
-                env = os.environ.copy()
+                from python_utils import get_python_env_with_encoding
+                env = get_python_env_with_encoding()
                 
                 # Use target password for psql
                 if target_parsed.password:
@@ -1461,7 +1462,8 @@ async def generate_backup_commands(environment: str, backup_type: str = "full", 
             
             try:
                 # Set PGPASSWORD environment variable for authentication
-                env = os.environ.copy()
+                from python_utils import get_python_env_with_encoding
+                env = get_python_env_with_encoding()
                 if db_password:
                     env["PGPASSWORD"] = db_password
                     result["console_output"].append(f"→ Password configured via PGPASSWORD environment variable")

@@ -317,11 +317,14 @@ async def update_application() -> Dict[str, Any]:
         steps.append({"step": "Reset to remote branch", "status": "success"})
         
         # Step 4: Install Python dependencies
+        from python_utils import get_python_env_with_encoding
+        env = get_python_env_with_encoding()
         pip_result = subprocess.run(
             ["pip3", "install", "-r", "requirements.txt"],
             cwd=f"{BUILDMASTER_PATH}/api",
             capture_output=True,
-            text=True
+            text=True,
+            env=env
         )
         steps.append({
             "step": "Install Python dependencies",

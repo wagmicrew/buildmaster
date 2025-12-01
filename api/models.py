@@ -28,9 +28,6 @@ class BuildMode(str, Enum):
 class ProjectType(str, Enum):
     """Project type enumeration"""
     NEXTJS = "nextjs"
-    VITE_REACT = "vite-react"
-    VITE_EXPRESS = "vite-express"
-    EXPRESS = "express"
     AUTO = "auto"  # Auto-detect based on package.json
 
 

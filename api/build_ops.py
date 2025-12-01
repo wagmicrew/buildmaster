@@ -18,6 +18,7 @@ from config import settings
 from models import BuildConfig, BuildStatus, BuildStatusResponse, ProjectType
 from email_service import send_build_started_email, send_build_completed_email, send_build_stalled_email
 from system_metrics import clear_workers
+from python_utils import get_python_env_with_encoding, format_python_command
 
 
 def detect_project_type(project_dir: str) -> str:
@@ -36,57 +37,17 @@ def detect_project_type(project_dir: str) -> str:
         all_deps = {**deps, **dev_deps}
         scripts = package_data.get("scripts", {})
         
-        # Check for Vite
-        has_vite = "vite" in all_deps
-        # Check for React
-        has_react = "react" in all_deps
-        # Check for Express
-        has_express = "express" in all_deps
         # Check for Next.js
         has_nextjs = "next" in all_deps
-        
-        # Check scripts for hints
-        has_vite_scripts = any("vite" in str(v).lower() for v in scripts.values())
         has_next_scripts = any("next" in str(v).lower() for v in scripts.values())
         
         if has_nextjs or has_next_scripts:
             return "nextjs"
-        elif has_vite or has_vite_scripts:
-            if has_express:
-                return "vite-express"
-            elif has_react:
-                return "vite-react"
-            else:
-                return "vite-react"  # Default Vite to React
-        elif has_express:
-            return "express"
         else:
             return "unknown"
     except Exception as e:
         print(f"[BUILD] Error detecting project type: {e}")
         return "unknown"
-
-
-def get_vite_build_command(config: BuildConfig, project_type: str, build_target: str) -> tuple:
-    """Get the appropriate build command for Vite projects"""
-    # Determine if building for development or production
-    is_production = build_target == "production"
-    
-    if project_type == "vite-express":
-        # Vite + Express: Build both frontend and backend
-        if is_production:
-            return ("pnpm", ["run", "build:prod"])
-        else:
-            return ("pnpm", ["run", "build"])
-    elif project_type == "vite-react":
-        # Pure Vite React
-        if is_production:
-            return ("pnpm", ["run", "build", "--", "--mode", "production"])
-        else:
-            return ("pnpm", ["run", "build", "--", "--mode", "development"])
-    else:
-        # Fallback
-        return ("pnpm", ["run", "build"])
 
 
 # In-memory build storage (in production, use SQLite)
@@ -193,15 +154,6 @@ def is_build_successful(output: str, exit_code: int) -> bool:
         'BUILD COMPLETED SUCCESSFULLY',
         'BUILD_COMPLETED created',
         'Build completed successfully',
-        # Vite indicators
-        'vite build',
-        'built in',
-        'dist/',
-        '✓ built in',
-        'Build successful',
-        # Express indicators
-        'Server compiled successfully',
-        'tsc -p',
     ]
     
     # Check for success indicators
@@ -234,10 +186,6 @@ def extract_errors(output: str) -> List[str]:
         
         # Next.js specific errors
         if 'Build error' in line or 'Failed to compile' in line:
-            errors.append(line)
-        
-        # Vite specific errors
-        if 'error during build' in line.lower() or '[vite]' in line.lower() and 'error' in line.lower():
             errors.append(line)
         
         # TypeScript errors
@@ -284,6 +232,111 @@ def extract_timings(output: str) -> Dict[str, float]:
         timings['total'] = float(total_match.group(1))
     
     return timings
+
+
+def extract_turbopack_info(output: str) -> Dict[str, Any]:
+    """Extract Turbopack-specific build information from Next.js 16 output"""
+    turbopack_info = {
+        "phases": [],
+        "current_phase": None,
+        "total_time_ms": None,
+        "is_turbopack": False,
+        "workers_active": 0,
+        "estimated_time_remaining": None
+    }
+    
+    lines = output.split('\n')
+    phases = []
+    current_phase = None
+    
+    # Check if Turbopack is being used
+    if 'Turbopack' in output or 'turbopack' in output.lower() or '▲ Next.js' in output:
+        turbopack_info["is_turbopack"] = True
+    
+    # Parse Turbopack build phases (Next.js 16 format)
+    # Patterns like:
+    # "✓ Compiled successfully in 615ms"
+    # "✓ Finished TypeScript in 1114ms"
+    # "✓ Collecting page data in 208ms"
+    # "✓ Generating static pages in 239ms"
+    # "✓ Finalizing page optimization in 5ms"
+    # "○ Compiling /..."
+    # "● Compiling /..."
+    
+    phase_patterns = [
+        (r'✓\s+Compiled successfully in (\d+)ms', 'Compilation', 'completed'),
+        (r'✓\s+Finished TypeScript in (\d+)ms', 'TypeScript', 'completed'),
+        (r'✓\s+Collecting page data in (\d+)ms', 'Page Data Collection', 'completed'),
+        (r'✓\s+Generating static pages? in (\d+)ms', 'Static Generation', 'completed'),
+        (r'✓\s+Finalizing page optimization in (\d+)ms', 'Optimization', 'completed'),
+        (r'○\s+Compiling\s+(.+?)(?:\s+in\s+(\d+)ms)?', 'Compiling', 'pending'),
+        (r'●\s+Compiling\s+(.+?)(?:\s+in\s+(\d+)ms)?', 'Compiling', 'active'),
+        (r'✓\s+Compiled\s+(.+?)\s+in\s+(\d+)ms', 'Compiled', 'completed'),
+        (r'Building\s+(.+?)(?:\s+in\s+(\d+)ms)?', 'Building', 'active'),
+        (r'✓\s+Building\s+(.+?)\s+in\s+(\d+)ms', 'Building', 'completed'),
+    ]
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        for pattern, phase_type, status in phase_patterns:
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
+                duration_ms = None
+                phase_name = phase_type
+                
+                if len(match.groups()) >= 1:
+                    if match.group(1).isdigit():
+                        duration_ms = int(match.group(1))
+                    else:
+                        phase_name = f"{phase_type}: {match.group(1)}"
+                        if len(match.groups()) >= 2 and match.group(2):
+                            duration_ms = int(match.group(2))
+                
+                phase_info = {
+                    "name": phase_name,
+                    "type": phase_type,
+                    "status": status,
+                    "duration_ms": duration_ms,
+                    "line": line
+                }
+                
+                phases.append(phase_info)
+                
+                if status == 'active':
+                    current_phase = phase_info
+                break
+    
+    # Extract build progress indicators
+    # Look for patterns like "Building 45/123 pages"
+    progress_match = re.search(r'Building\s+(\d+)/(\d+)\s+pages?', output, re.IGNORECASE)
+    if progress_match:
+        current = int(progress_match.group(1))
+        total = int(progress_match.group(2))
+        turbopack_info["build_progress"] = {
+            "current": current,
+            "total": total,
+            "percentage": (current / total * 100) if total > 0 else 0
+        }
+    
+    # Estimate time remaining based on completed phases
+    completed_phases = [p for p in phases if p["status"] == "completed" and p["duration_ms"]]
+    if completed_phases and current_phase:
+        avg_time = sum(p["duration_ms"] for p in completed_phases) / len(completed_phases)
+        # Estimate remaining time (rough heuristic)
+        remaining_phases = len([p for p in phases if p["status"] in ["pending", "active"]])
+        if remaining_phases > 0:
+            turbopack_info["estimated_time_remaining"] = int(avg_time * remaining_phases * 1.2)  # 20% buffer
+    
+    turbopack_info["phases"] = phases
+    turbopack_info["current_phase"] = current_phase
+    
+    # Count active workers (approximate based on active phases)
+    turbopack_info["workers_active"] = len([p for p in phases if p["status"] == "active"])
+    
+    return turbopack_info
 
 
 def get_current_step_from_log(log_content: str) -> tuple[int, str]:
@@ -453,7 +506,8 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
         working_dir = settings.DEV_DIR
         
         # Build environment variables for build-production-unified.mjs
-        env = os.environ.copy()
+        # Use Python utils to ensure UTF-8 encoding for any Python scripts
+        env = get_python_env_with_encoding()
         env["BUILD_ID"] = build_id
         
         # Determine build mode
@@ -475,68 +529,8 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
         env["PROJECT_TYPE"] = project_type
         
         # Determine build command based on project type
-        if project_type in ["vite-react", "vite-express"]:
-            # Vite-based project
-            build_cmd, build_args = get_vite_build_command(config, project_type, build_target)
-            build_script = " ".join(build_args)
-            
-            # Vite-specific environment variables
-            if config.vite_mode:
-                env["VITE_MODE"] = config.vite_mode
-            
-            # Vite build options
-            env["VITE_MINIFY"] = "true" if config.vite_minify else "false"
-            env["VITE_LEGACY"] = "true" if config.vite_legacy else "false"
-            env["VITE_SSR"] = "true" if config.vite_ssr else "false"
-            env["VITE_MANIFEST"] = "true" if config.vite_manifest else "false"
-            env["VITE_CSS_CODE_SPLIT"] = "true" if config.vite_css_code_split else "false"
-            env["VITE_SOURCEMAP"] = "true" if config.vite_sourcemap else "false"
-            env["VITE_REPORT_SIZE"] = "true" if config.vite_report_size else "false"
-            env["VITE_CHUNK_SIZE_WARNING"] = "true" if config.vite_chunk_size_warning else "false"
-            env["VITE_CHUNK_SIZE_LIMIT"] = str(config.vite_chunk_size_limit)
-            env["VITE_ASSET_INLINE_LIMIT"] = str(config.vite_asset_inline_limit * 1024)  # Convert KB to bytes
-            env["VITE_TARGET"] = config.vite_target
-            env["VITE_MINIFIER"] = config.vite_minifier
-            
-            # For Vite+Express, handle backend build
-            if project_type == "vite-express" and config.express_build:
-                env["BUILD_EXPRESS"] = "true"
-                env["EXPRESS_TYPESCRIPT"] = "true" if config.express_typescript else "false"
-                env["EXPRESS_BUNDLE"] = "true" if config.express_bundle else "false"
-                env["EXPRESS_SOURCEMAP"] = "true" if config.express_sourcemap else "false"
-                env["EXPRESS_MINIFY"] = "true" if config.express_minify else "false"
-                env["EXPRESS_COPY_ASSETS"] = "true" if config.express_copy_assets else "false"
-                env["EXPRESS_NODE_TARGET"] = config.express_node_target
-                env["EXPRESS_MODULE_FORMAT"] = config.express_module_format
-                env["EXPRESS_OUT_DIR"] = config.express_out_dir
-                env["EXPRESS_ENTRY"] = config.express_entry
-            
-            # Vite memory settings
-            if config.max_old_space_size and config.max_old_space_size > 0:
-                env["NODE_OPTIONS"] = f"--max-old-space-size={config.max_old_space_size}"
-        
-        elif project_type == "express":
-            # Express-only project
-            build_cmd = "pnpm"
-            build_args = ["run", "build"]
-            build_script = "build"
-            
-            # Express build options
-            env["EXPRESS_TYPESCRIPT"] = "true" if config.express_typescript else "false"
-            env["EXPRESS_BUNDLE"] = "true" if config.express_bundle else "false"
-            env["EXPRESS_SOURCEMAP"] = "true" if config.express_sourcemap else "false"
-            env["EXPRESS_MINIFY"] = "true" if config.express_minify else "false"
-            env["EXPRESS_COPY_ASSETS"] = "true" if config.express_copy_assets else "false"
-            env["EXPRESS_NODE_TARGET"] = config.express_node_target
-            env["EXPRESS_MODULE_FORMAT"] = config.express_module_format
-            env["EXPRESS_OUT_DIR"] = config.express_out_dir
-            env["EXPRESS_ENTRY"] = config.express_entry
-            
-            if config.max_old_space_size and config.max_old_space_size > 0:
-                env["NODE_OPTIONS"] = f"--max-old-space-size={config.max_old_space_size}"
-        
-        else:
-            # Next.js or other project - use existing logic
+        # Only Next.js is supported now
+        if project_type == "nextjs":
             # Map build mode to build script
             build_script_map = {
                 "quick": "build:quick",
@@ -581,6 +575,12 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
                 env["TEST_REDIS"] = "true"
             else:  # full, ram-optimized
                 env["BUILD_MODE"] = "full"
+        else:
+            # Unknown project type - default to Next.js build
+            build_script = "build:server"
+            build_cmd = "pnpm"
+            build_args = ["run", build_script]
+            env["BUILD_MODE"] = "full"
         
         # Skip dependencies installation (only if not already set)
         if "SKIP_DEPS" not in env:
@@ -688,6 +688,9 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
                         # Get current step from log
                         current_step, step_name = get_current_step_from_log(content)
                         
+                        # Extract Turbopack information
+                        turbopack_info = extract_turbopack_info(content)
+                        
                         if current_step != last_step:
                             last_step = current_step
                             progress = calculate_progress(current_step)
@@ -698,6 +701,46 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
                                 status_data["progress"] = round(progress, 1)
                                 status_data["message"] = step_name
                                 status_data["elapsed_seconds"] = int(elapsed_seconds)
+                                
+                                # Add Turbopack information
+                                status_data["turbopack"] = turbopack_info
+                                
+                                # Update progress based on Turbopack if available
+                                if turbopack_info.get("build_progress"):
+                                    build_progress = turbopack_info["build_progress"]
+                                    # Blend step progress with Turbopack progress
+                                    # Assume BUILD step is 30-90% of total
+                                    if current_step >= 5:  # BUILD step
+                                        base_progress = 30.0
+                                        build_range = 60.0
+                                        turbopack_pct = build_progress.get("percentage", 0)
+                                        status_data["progress"] = round(base_progress + (build_range * turbopack_pct / 100), 1)
+                                
+                                # Update message with current Turbopack phase if available
+                                if turbopack_info.get("current_phase"):
+                                    phase = turbopack_info["current_phase"]
+                                    status_data["message"] = f"{step_name} - {phase['name']}"
+                                
+                                save_build_status(build_id, status_data)
+                        elif turbopack_info.get("is_turbopack"):
+                            # Update Turbopack info even if step hasn't changed
+                            status_data = load_build_status(build_id)
+                            if status_data:
+                                status_data["turbopack"] = turbopack_info
+                                
+                                # Update message with current phase
+                                if turbopack_info.get("current_phase"):
+                                    phase = turbopack_info["current_phase"]
+                                    status_data["message"] = f"{step_name} - {phase['name']}"
+                                
+                                # Update progress if build progress available
+                                if turbopack_info.get("build_progress") and current_step >= 5:
+                                    build_progress = turbopack_info["build_progress"]
+                                    base_progress = 30.0
+                                    build_range = 60.0
+                                    turbopack_pct = build_progress.get("percentage", 0)
+                                    status_data["progress"] = round(base_progress + (build_range * turbopack_pct / 100), 1)
+                                
                                 save_build_status(build_id, status_data)
                         
                         # SANITY CHECK 2: Stall detection (no output for 10 minutes)
@@ -806,6 +849,11 @@ async def run_build(build_id: str, config: BuildConfig, workers: int):
             timings = extract_timings(log_content)
             if timings:
                 status_data["timings"] = timings
+            
+            # Extract and store final Turbopack info
+            turbopack_info = extract_turbopack_info(log_content)
+            if turbopack_info.get("is_turbopack"):
+                status_data["turbopack"] = turbopack_info
         else:
             status_data["status"] = BuildStatus.ERROR.value
             

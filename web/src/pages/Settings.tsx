@@ -30,6 +30,7 @@ import {
   RotateCw,
   Upload
 } from 'lucide-react'
+import NginxEditor from '../components/NginxEditor'
 
 type SettingsTab = 'development' | 'production' | 'database' | 'build' | 'pm2' | 'nginx' | 'server' | 'buildmaster'
 
@@ -1525,11 +1526,14 @@ export default function Settings() {
 
   const renderNginxSettings = () => (
     <div className="space-y-6">
-      {/* Development Nginx */}
-      <div className="glass rounded-xl p-6">
+      {/* Nginx Editor with Autofix */}
+      <NginxEditor env={activeTab === 'nginx' ? 'dev' : 'prod'} />
+      
+      {/* Legacy Settings (kept for reference) */}
+      <div className="glass rounded-xl p-6 opacity-50">
         <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <Globe className="text-sky-400" size={20} />
-          Nginx Development Site
+          Nginx Development Site (Legacy Settings)
         </h3>
         
         <div className="space-y-4">

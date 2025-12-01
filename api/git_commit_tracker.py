@@ -350,7 +350,7 @@ async def get_commit_timeline() -> List[Dict]:
         
         # Get recent commits from remote
         result = subprocess.run(
-            ["git", "log", "origin/V24", "--pretty=%H|%h|%s|%an|%ae|%ai|%ar", "-20", "--no-merges"],
+            ["git", "log", "origin/V25", "--pretty=%H|%h|%s|%an|%ae|%ai|%ar", "-20", "--no-merges"],
             cwd=str(dev_dir),
             capture_output=True,
             text=True,

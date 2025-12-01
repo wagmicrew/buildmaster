@@ -7,9 +7,6 @@ import api from '../services/api'
 const PROJECT_TYPES = [
   { value: 'auto', label: 'Auto-detect', description: 'Automatically detect from package.json' },
   { value: 'nextjs', label: 'Next.js', description: 'Next.js React framework' },
-  { value: 'vite-react', label: 'Vite + React', description: 'Vite with React frontend' },
-  { value: 'vite-express', label: 'Vite + Express', description: 'Vite frontend with Express backend' },
-  { value: 'express', label: 'Express Only', description: 'Express.js backend only' },
 ]
 
 // Build target options
@@ -82,50 +79,6 @@ function BuildOption({
   )
 }
 
-// Vite-specific build options
-const VITE_OPTIONS = {
-  vite_minify: {
-    label: 'Minify with esbuild',
-    help: 'Use esbuild for fast minification. Faster than terser but slightly larger output. Recommended for most projects.',
-    default: true
-  },
-  vite_legacy: {
-    label: 'Legacy Browser Support',
-    help: 'Generate legacy chunks for older browsers (IE11, etc). Increases bundle size but improves compatibility. Uses @vitejs/plugin-legacy.',
-    default: false
-  },
-  vite_ssr: {
-    label: 'SSR Build',
-    help: 'Build for Server-Side Rendering. Creates separate client and server bundles. Required for SSR frameworks.',
-    default: false
-  },
-  vite_manifest: {
-    label: 'Generate Manifest',
-    help: 'Generate a manifest.json file mapping original filenames to hashed versions. Useful for backend integration.',
-    default: true
-  },
-  vite_css_code_split: {
-    label: 'CSS Code Splitting',
-    help: 'Split CSS into separate chunks per JS chunk. Reduces initial load but may cause FOUC. Disable for critical CSS.',
-    default: true
-  },
-  vite_sourcemap: {
-    label: 'Source Maps',
-    help: 'Generate source maps for debugging. "hidden" for production (no reference in files), "inline" for development.',
-    default: false
-  },
-  vite_report_size: {
-    label: 'Bundle Size Report',
-    help: 'Analyze and report bundle sizes after build. Helps identify large dependencies and optimization opportunities.',
-    default: false
-  },
-  vite_chunk_size_warning: {
-    label: 'Chunk Size Warnings',
-    help: 'Warn when chunks exceed 500KB. Helps catch accidentally large bundles before deployment.',
-    default: true
-  }
-}
-
 // Next.js specific build options
 const NEXTJS_OPTIONS = {
   next_standalone: {
@@ -156,35 +109,6 @@ const NEXTJS_OPTIONS = {
   next_modularize_imports: {
     label: 'Modularize Imports',
     help: 'Automatically transform barrel imports to direct imports. Reduces bundle size for libraries like lodash, MUI, etc.',
-    default: true
-  }
-}
-
-// Express-specific build options
-const EXPRESS_OPTIONS = {
-  express_typescript: {
-    label: 'TypeScript Compilation',
-    help: 'Compile TypeScript to JavaScript using tsc. Enable for TS projects, disable if using ts-node in production.',
-    default: true
-  },
-  express_bundle: {
-    label: 'Bundle with esbuild',
-    help: 'Bundle all dependencies into a single file using esbuild. Faster startup, smaller deployment, but harder to debug.',
-    default: false
-  },
-  express_sourcemap: {
-    label: 'Source Maps',
-    help: 'Generate source maps for stack traces. Essential for debugging production errors. Slight performance overhead.',
-    default: true
-  },
-  express_minify: {
-    label: 'Minify Output',
-    help: 'Minify compiled JavaScript. Reduces file size but makes debugging harder. Recommended for production.',
-    default: false
-  },
-  express_copy_assets: {
-    label: 'Copy Static Assets',
-    help: 'Copy static files (views, public folder) to dist. Required if you have templates or static files.',
     default: true
   }
 }
@@ -389,93 +313,6 @@ export default function BuildConfigTab({
         </div>
 
         {/* Dynamic Project-Specific Options */}
-        {(config.project_type === 'vite-react' || config.project_type === 'vite-express') && (
-          <div className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 rounded-xl p-4 border border-purple-500/30">
-            <h3 className="text-sm font-medium text-white mb-4 flex items-center gap-2">
-              <Zap size={16} className="text-purple-400" />
-              Vite Build Options
-              <HelpTooltip text="These options control how Vite builds your project. They affect bundle size, build speed, and browser compatibility." />
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {Object.entries(VITE_OPTIONS).map(([key, opt]) => (
-                <BuildOption
-                  key={key}
-                  label={opt.label}
-                  helpText={opt.help}
-                  checked={config[key] ?? opt.default}
-                  onChange={(checked) => onChange({ ...config, [key]: checked })}
-                />
-              ))}
-            </div>
-            
-            {/* Vite-specific inputs */}
-            <div className="mt-4 pt-4 border-t border-purple-500/20 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center">
-                  Chunk Size Limit (KB)
-                  <HelpTooltip text="Maximum size for individual chunks before Vite warns. Smaller chunks load faster but increase HTTP requests. Default: 500KB." />
-                </label>
-                <input
-                  type="number"
-                  value={config.vite_chunk_size_limit || 500}
-                  onChange={(e) => onChange({ ...config, vite_chunk_size_limit: parseInt(e.target.value) })}
-                  className="w-full bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-600 focus:border-purple-500 focus:outline-none text-sm"
-                  min="100"
-                  max="2000"
-                  step="100"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center">
-                  Asset Inline Limit (KB)
-                  <HelpTooltip text="Assets smaller than this are inlined as base64 in JavaScript. Reduces HTTP requests but increases bundle size. Default: 4KB." />
-                </label>
-                <input
-                  type="number"
-                  value={config.vite_asset_inline_limit || 4}
-                  onChange={(e) => onChange({ ...config, vite_asset_inline_limit: parseInt(e.target.value) })}
-                  className="w-full bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-600 focus:border-purple-500 focus:outline-none text-sm"
-                  min="0"
-                  max="100"
-                  step="1"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center">
-                  Build Target
-                  <HelpTooltip text="JavaScript/CSS target for transpilation. 'esnext' for modern browsers only, 'es2015' for broader support. Affects bundle size and features." />
-                </label>
-                <select
-                  value={config.vite_target || 'esnext'}
-                  onChange={(e) => onChange({ ...config, vite_target: e.target.value })}
-                  className="w-full bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-600 focus:border-purple-500 focus:outline-none text-sm"
-                >
-                  <option value="esnext">ESNext (Modern browsers)</option>
-                  <option value="es2022">ES2022</option>
-                  <option value="es2020">ES2020</option>
-                  <option value="es2019">ES2019</option>
-                  <option value="es2018">ES2018</option>
-                  <option value="es2015">ES2015 (Widest support)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center">
-                  Minifier
-                  <HelpTooltip text="esbuild is faster but terser produces smaller bundles. Use esbuild for development speed, terser for production optimization." />
-                </label>
-                <select
-                  value={config.vite_minifier || 'esbuild'}
-                  onChange={(e) => onChange({ ...config, vite_minifier: e.target.value })}
-                  className="w-full bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-600 focus:border-purple-500 focus:outline-none text-sm"
-                >
-                  <option value="esbuild">esbuild (Fast)</option>
-                  <option value="terser">Terser (Smaller output)</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
-
         {config.project_type === 'nextjs' && (
           <div className="bg-gradient-to-br from-blue-500/10 to-indigo-500/10 rounded-xl p-4 border border-blue-500/30">
             <h3 className="text-sm font-medium text-white mb-4 flex items-center gap-2">
@@ -554,87 +391,6 @@ export default function BuildConfigTab({
                   <option value="disabled">Disabled</option>
                   <option value="enabled">Enabled (Experimental)</option>
                 </select>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {(config.project_type === 'express' || config.project_type === 'vite-express') && (
-          <div className="bg-gradient-to-br from-green-500/10 to-emerald-500/10 rounded-xl p-4 border border-green-500/30">
-            <h3 className="text-sm font-medium text-white mb-4 flex items-center gap-2">
-              <Server size={16} className="text-green-400" />
-              Express Backend Options
-              <HelpTooltip text="These options control how the Express.js backend is built and bundled for deployment." />
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {Object.entries(EXPRESS_OPTIONS).map(([key, opt]) => (
-                <BuildOption
-                  key={key}
-                  label={opt.label}
-                  helpText={opt.help}
-                  checked={config[key] ?? opt.default}
-                  onChange={(checked) => onChange({ ...config, [key]: checked })}
-                />
-              ))}
-            </div>
-            
-            {/* Express specific inputs */}
-            <div className="mt-4 pt-4 border-t border-green-500/20 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center">
-                  Node Target
-                  <HelpTooltip text="Target Node.js version for compilation. Use your production server's Node version for best compatibility." />
-                </label>
-                <select
-                  value={config.express_node_target || 'node18'}
-                  onChange={(e) => onChange({ ...config, express_node_target: e.target.value })}
-                  className="w-full bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-600 focus:border-green-500 focus:outline-none text-sm"
-                >
-                  <option value="node22">Node 22 (Latest)</option>
-                  <option value="node20">Node 20 (LTS)</option>
-                  <option value="node18">Node 18 (LTS)</option>
-                  <option value="node16">Node 16 (Legacy)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center">
-                  Module Format
-                  <HelpTooltip text="ESM is modern and supports top-level await. CommonJS has wider compatibility. Match your package.json type field." />
-                </label>
-                <select
-                  value={config.express_module_format || 'esm'}
-                  onChange={(e) => onChange({ ...config, express_module_format: e.target.value })}
-                  className="w-full bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-600 focus:border-green-500 focus:outline-none text-sm"
-                >
-                  <option value="esm">ESM (import/export)</option>
-                  <option value="cjs">CommonJS (require)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center">
-                  Output Directory
-                  <HelpTooltip text="Directory where compiled backend files are placed. Common choices: dist, build, out." />
-                </label>
-                <input
-                  type="text"
-                  value={config.express_out_dir || 'dist'}
-                  onChange={(e) => onChange({ ...config, express_out_dir: e.target.value })}
-                  className="w-full bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-600 focus:border-green-500 focus:outline-none text-sm"
-                  placeholder="dist"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center">
-                  Entry Point
-                  <HelpTooltip text="Main server file to compile. Usually src/index.ts, src/server.ts, or src/app.ts." />
-                </label>
-                <input
-                  type="text"
-                  value={config.express_entry || 'src/index.ts'}
-                  onChange={(e) => onChange({ ...config, express_entry: e.target.value })}
-                  className="w-full bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-600 focus:border-green-500 focus:outline-none text-sm"
-                  placeholder="src/index.ts"
-                />
               </div>
             </div>
           </div>
@@ -770,7 +526,7 @@ export default function BuildConfigTab({
 
                 <BuildOption
                   label="🔥 Experimental Turbo Mode"
-                  helpText="Use Next.js Turbopack or Vite's experimental features. UNSTABLE: May cause build failures. Only for testing new features."
+                  helpText="Use Next.js Turbopack experimental features. UNSTABLE: May cause build failures. Only for testing new features."
                   checked={config.experimental_turbo}
                   onChange={(checked) => onChange({ ...config, experimental_turbo: checked })}
                   badge="unstable, -50% time"

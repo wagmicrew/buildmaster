@@ -60,7 +60,7 @@ Same console output display pattern
 
 ## BUILD & DEPLOY
 ```bash
-cd c:\projects\V24\Documentation_new\build-dashboard\web
+cd c:\projects\V25\Documentation_new\build-dashboard\web
 npx vite build
 scp -r build/* root@server:/var/www/build/web/build/
 ```
