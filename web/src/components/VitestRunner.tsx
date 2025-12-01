@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Shield, Play, FileText, Copy, CheckCircle, XCircle, AlertCircle, Loader2, RefreshCw } from 'lucide-react'
+import { Shield, Play, FileText, Copy, CheckCircle, XCircle, AlertCircle, Loader2, RefreshCw, Clock, Zap, AlertTriangle, Edit, BarChart3, Terminal, Code, Activity } from 'lucide-react'
 import api from '../services/api'
 
 interface VitestTest {
@@ -10,6 +10,23 @@ interface VitestTest {
   size_bytes: number
   is_troubleshooting: boolean
   category: string
+}
+
+interface TestStatistics {
+  total: number
+  passed: number
+  failed: number
+  skipped: number
+  duration: number
+  passRate: number
+}
+
+interface TestFailure {
+  test: string
+  file: string
+  error: string
+  suggestion: string
+  line?: number
 }
 
 interface VitestDiscoveryResult {
@@ -28,17 +45,22 @@ interface VitestRunResult {
   console_output: string[]
   error?: string
   duration_seconds: number
+  statistics?: TestStatistics
+  failures?: TestFailure[]
 }
 
-export const VitestRunner: React.FC = () => {
+const VitestRunner: React.FC = () => {
   const [environment, setEnvironment] = useState<'dev' | 'prod'>('dev')
   const [discoveryResult, setDiscoveryResult] = useState<VitestDiscoveryResult | null>(null)
   const [runResult, setRunResult] = useState<VitestRunResult | null>(null)
   const [selectedTest, setSelectedTest] = useState<VitestTest | null>(null)
-  const [selectedTestName, setSelectedTestName] = useState<string>('')
   const [isLoading, setIsLoading] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [showEditor, setShowEditor] = useState(false)
+  const [editingTest, setEditingTest] = useState<VitestTest | null>(null)
+  const [testFileContent, setTestFileContent] = useState('')
+  const [showConsole, setShowConsole] = useState(false)
 
   // Discover tests on component mount and environment change
   useEffect(() => {
@@ -60,6 +82,7 @@ export const VitestRunner: React.FC = () => {
 
   const runTests = async (testFile?: string, testName?: string) => {
     setIsRunning(true)
+    setShowConsole(true)
     try {
       const payload: any = { environment }
       if (testFile) payload.test_file = testFile
@@ -67,7 +90,10 @@ export const VitestRunner: React.FC = () => {
 
       const response = await api.post('/troubleshooting/vitest/run', payload)
       const result = response.data
-      setRunResult(result)
+      
+      // Parse console output to extract statistics and failures
+      const parsedResult = parseTestOutput(result)
+      setRunResult(parsedResult)
     } catch (error) {
       console.error('Error running tests:', error)
     } finally {
@@ -75,16 +101,86 @@ export const VitestRunner: React.FC = () => {
     }
   }
 
-  const runAllTests = () => {
-    setSelectedTest(null)
-    setSelectedTestName('')
-    runTests()
+  const parseTestOutput = (result: VitestRunResult): VitestRunResult => {
+    const output = result.console_output.join('\n')
+    
+    // Extract test statistics
+    const stats: TestStatistics = {
+      total: 0,
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      duration: result.duration_seconds,
+      passRate: 0
+    }
+
+    // Parse test results from console output
+    const testResults = output.match(/✓|✗|⚠️/g) || []
+    stats.total = testResults.length
+    stats.passed = (output.match(/✓/g) || []).length
+    stats.failed = (output.match(/✗/g) || []).length
+    stats.skipped = (output.match(/⚠️/g) || []).length
+    stats.passRate = stats.total > 0 ? (stats.passed / stats.total) * 100 : 0
+
+    // Extract failures and generate suggestions
+    const failures: TestFailure[] = []
+    const errorLines = output.split('\n').filter(line => 
+      line.includes('✗') || line.includes('Error:') || line.includes('FAIL')
+    )
+
+    errorLines.forEach((line) => {
+      const errorMatch = line.match(/✗\s+(.+?)\s*\((.+?):(\d+):\d+\)/)
+      if (errorMatch) {
+        const [, test, file, lineNum] = errorMatch
+        failures.push({
+          test: test.trim(),
+          file: file.trim(),
+          error: line.trim(),
+          suggestion: generateSuggestion(line.trim()),
+          line: parseInt(lineNum)
+        })
+      }
+    })
+
+    return {
+      ...result,
+      statistics: stats,
+      failures: failures
+    }
   }
 
-  const runSelectedTest = () => {
-    if (selectedTest) {
-      runTests(selectedTest.file, selectedTestName || undefined)
+  const generateSuggestion = (error: string): string => {
+    if (error.includes('Cannot find module')) {
+      return '💡 Install missing dependencies with: npm install <module-name>'
     }
+    if (error.includes('timeout')) {
+      return '⏱️ Test timed out. Consider increasing timeout or optimizing test performance'
+    }
+    if (error.includes('TypeError')) {
+      return '🔧 Type error detected. Check variable types and imports'
+    }
+    if (error.includes('AssertionError')) {
+      return '❌ Test assertion failed. Verify expected vs actual values'
+    }
+    return '🔍 Check test logic and dependencies'
+  }
+
+  const openTestEditor = async (test: VitestTest) => {
+    setEditingTest(test)
+    setShowEditor(true)
+    // In a real implementation, you'd fetch the file content
+    setTestFileContent(`// Test file: ${test.file}\n// Content would be loaded from server\n\nimport { describe, it, expect } from 'vitest'\n\ndescribe('Sample Test', () => {\n  it('should work', () => {\n    expect(true).toBe(true)\n  })\n})`)
+  }
+
+  const getProgressColor = (percentage: number): string => {
+    if (percentage >= 80) return 'bg-gradient-to-r from-green-400 to-emerald-500'
+    if (percentage >= 60) return 'bg-gradient-to-r from-yellow-400 to-orange-500'
+    return 'bg-gradient-to-r from-red-400 to-pink-500'
+  }
+
+  const runAllTests = () => {
+    setSelectedTest(null)
+    runTests()
   }
 
   const copyToClipboard = (text: string) => {
@@ -103,57 +199,155 @@ export const VitestRunner: React.FC = () => {
     }
   }
 
-  const getStatusIcon = (success: boolean) => {
-    if (success) return <CheckCircle className="w-4 h-4 text-green-500" />
-    return <XCircle className="w-4 h-4 text-red-500" />
-  }
-
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 bg-gradient-to-br from-slate-50 to-blue-50 min-h-screen">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <Shield className="w-6 h-6 text-blue-500" />
-          <h2 className="text-xl font-semibold">Vitest Test Runner</h2>
+      <div className="flex items-center justify-between bg-white rounded-2xl shadow-lg p-6 border border-blue-100">
+        <div className="flex items-center space-x-4">
+          <div className="p-3 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl shadow-lg">
+            <Activity className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+              Vitest Test Runner
+            </h2>
+            <p className="text-sm text-gray-600">Modern testing with real-time analytics</p>
+          </div>
         </div>
         <div className="flex items-center space-x-4">
           {/* Environment Toggle */}
-          <div className="flex items-center space-x-2">
-            <label className="text-sm font-medium">Environment:</label>
-            <select
-              value={environment}
-              onChange={(e) => setEnvironment(e.target.value as 'dev' | 'prod')}
-              className="px-3 py-1 border rounded-md text-sm"
+          <div className="flex items-center space-x-2 bg-gray-50 rounded-lg p-1">
+            <button
+              onClick={() => setEnvironment('dev')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                environment === 'dev' 
+                  ? 'bg-blue-500 text-white shadow-md' 
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
             >
-              <option value="dev">Development</option>
-              <option value="prod">Production</option>
-            </select>
+              <Zap className="w-4 h-4 inline mr-1" />
+              Dev
+            </button>
+            <button
+              onClick={() => setEnvironment('prod')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                environment === 'prod' 
+                  ? 'bg-purple-500 text-white shadow-md' 
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              <Shield className="w-4 h-4 inline mr-1" />
+              Prod
+            </button>
           </div>
           
           {/* Refresh Button */}
           <button
             onClick={discoverTests}
             disabled={isLoading}
-            className="p-2 text-gray-600 hover:text-gray-800 disabled:opacity-50"
+            className="p-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl shadow-lg hover:shadow-xl transition-all disabled:opacity-50"
             title="Refresh test discovery"
           >
-            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </div>
 
+      {/* Statistics Cards */}
+      {runResult?.statistics && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-xl shadow-lg p-6 border border-green-100">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Total Tests</p>
+                <p className="text-3xl font-bold text-gray-900">{runResult.statistics.total}</p>
+              </div>
+              <div className="p-3 bg-blue-100 rounded-lg">
+                <BarChart3 className="w-6 h-6 text-blue-600" />
+              </div>
+            </div>
+          </div>
+          
+          <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl shadow-lg p-6 border border-green-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-green-600">Passed</p>
+                <p className="text-3xl font-bold text-green-700">{runResult.statistics.passed}</p>
+              </div>
+              <div className="p-3 bg-green-100 rounded-lg">
+                <CheckCircle className="w-6 h-6 text-green-600" />
+              </div>
+            </div>
+          </div>
+          
+          <div className="bg-gradient-to-br from-red-50 to-pink-50 rounded-xl shadow-lg p-6 border border-red-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-red-600">Failed</p>
+                <p className="text-3xl font-bold text-red-700">{runResult.statistics.failed}</p>
+              </div>
+              <div className="p-3 bg-red-100 rounded-lg">
+                <XCircle className="w-6 h-6 text-red-600" />
+              </div>
+            </div>
+          </div>
+          
+          <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-xl shadow-lg p-6 border border-purple-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-purple-600">Duration</p>
+                <p className="text-3xl font-bold text-purple-700">{runResult.statistics.duration}s</p>
+              </div>
+              <div className="p-3 bg-purple-100 rounded-lg">
+                <Clock className="w-6 h-6 text-purple-600" />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Progress Bar */}
+      {runResult?.statistics && (
+        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">Test Results</h3>
+            <span className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+              {runResult.statistics.passRate.toFixed(1)}%
+            </span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-8 overflow-hidden">
+            <div 
+              className={`h-full ${getProgressColor(runResult.statistics.passRate)} transition-all duration-1000 ease-out flex items-center justify-center text-white font-semibold shadow-lg`}
+              style={{ width: `${runResult.statistics.passRate}%` }}
+            >
+              {runResult.statistics.passRate > 10 && `${runResult.statistics.passRate.toFixed(1)}%`}
+            </div>
+          </div>
+          <div className="flex justify-between mt-4 text-sm">
+            <span className="text-green-600 font-medium">{runResult.statistics.passed} passed</span>
+            <span className="text-red-600 font-medium">{runResult.statistics.failed} failed</span>
+            <span className="text-yellow-600 font-medium">{runResult.statistics.skipped} skipped</span>
+          </div>
+        </div>
+      )}
+
       {/* Test Discovery */}
-      <div className="bg-white rounded-lg border p-4">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-medium flex items-center">
-            <FileText className="w-4 h-4 mr-2" />
+      <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-lg font-semibold flex items-center text-gray-900">
+            <FileText className="w-5 h-5 mr-2 text-blue-500" />
             Available Tests
+            {discoveryResult?.tests && (
+              <span className="ml-2 px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-full">
+                {discoveryResult.tests.length} files
+              </span>
+            )}
           </h3>
-          <div className="flex space-x-2">
+          <div className="flex space-x-3">
             <button
               onClick={runAllTests}
               disabled={isRunning || !discoveryResult?.tests.length}
-              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50 flex items-center"
+              className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:shadow-lg transition-all disabled:opacity-50 flex items-center font-medium"
             >
               {isRunning ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -165,84 +359,120 @@ export const VitestRunner: React.FC = () => {
             <button
               onClick={getReport}
               disabled={isLoading}
-              className="px-4 py-2 border rounded-md hover:bg-gray-50 disabled:opacity-50 flex items-center"
+              className="px-4 py-3 border border-gray-300 rounded-xl hover:bg-gray-50 disabled:opacity-50 flex items-center font-medium"
             >
               {copied ? <CheckCircle className="w-4 h-4 mr-2 text-green-500" /> : <Copy className="w-4 h-4 mr-2" />}
               {copied ? 'Copied!' : 'Copy Report'}
+            </button>
+            <button
+              onClick={() => setShowConsole(!showConsole)}
+              className="px-4 py-3 border border-gray-300 rounded-xl hover:bg-gray-50 flex items-center font-medium"
+            >
+              <Terminal className="w-4 h-4 mr-2" />
+              {showConsole ? 'Hide' : 'Show'} Console
             </button>
           </div>
         </div>
 
         {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 animate-spin mr-2" />
-            <span>Discovering tests...</span>
+          <div className="flex items-center justify-center py-12">
+            <div className="flex flex-col items-center">
+              <Loader2 className="w-8 h-8 animate-spin text-blue-500 mb-3" />
+              <span className="text-gray-600 font-medium">Discovering tests...</span>
+            </div>
           </div>
         ) : discoveryResult?.error ? (
-          <div className="flex items-center text-red-600 py-4">
-            <AlertCircle className="w-4 h-4 mr-2" />
-            <span>{discoveryResult.error}</span>
+          <div className="flex items-center text-red-600 py-8 bg-red-50 rounded-lg border border-red-200">
+            <AlertCircle className="w-5 h-5 mr-3" />
+            <span className="font-medium">{discoveryResult.error}</span>
           </div>
         ) : discoveryResult?.tests.length === 0 ? (
-          <div className="text-gray-500 py-4 text-center">
-            No Vitest tests found in {environment} environment
+          <div className="text-gray-500 py-8 text-center bg-gray-50 rounded-lg">
+            <FileText className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+            <p>No Vitest tests found in {environment} environment</p>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-3">
             {discoveryResult?.tests.map((test: VitestTest, index: number) => (
               <div
                 key={index}
-                className={`border rounded-lg p-3 cursor-pointer transition-colors ${
-                  selectedTest?.file === test.file ? 'border-blue-500 bg-blue-50' : 'hover:bg-gray-50'
-                }`}
+                className={`border rounded-xl p-4 cursor-pointer transition-all hover:shadow-md ${
+                  selectedTest?.file === test.file 
+                    ? 'border-blue-500 bg-gradient-to-r from-blue-50 to-purple-50 shadow-lg' 
+                    : 'border-gray-200 hover:border-gray-300 bg-white'
+                } text-gray-900`}
                 onClick={() => setSelectedTest(test)}
               >
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    {test.is_troubleshooting ? (
-                      <Shield className="w-4 h-4 text-blue-500" />
-                    ) : (
-                      <FileText className="w-4 h-4 text-gray-400" />
-                    )}
+                  <div className="flex items-center space-x-4">
+                    <div className={`p-2 rounded-lg ${
+                      test.is_troubleshooting 
+                        ? 'bg-blue-100 text-blue-600' 
+                        : 'bg-gray-100 text-gray-600'
+                    }`}>
+                      {test.is_troubleshooting ? (
+                        <Shield className="w-5 h-5" />
+                      ) : (
+                        <FileText className="w-5 h-5" />
+                      )}
+                    </div>
                     <div>
-                      <div className="font-medium text-sm">{test.file}</div>
-                      <div className="text-xs text-gray-500">
-                        {test.test_count} tests • {test.size_bytes} bytes
+                      <div className="font-semibold text-gray-900 flex items-center">
+                        {test.file}
+                        {test.is_troubleshooting && (
+                          <span className="ml-2 px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-full">
+                            Troubleshooting
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        {test.test_count} tests • {(test.size_bytes / 1024).toFixed(1)} KB
                       </div>
                     </div>
                   </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setSelectedTest(test)
-                      setSelectedTestName('')
-                      runTests(test.file)
-                    }}
-                    disabled={isRunning}
-                    className="p-1 text-gray-600 hover:text-blue-600 disabled:opacity-50"
-                  >
-                    <Play className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openTestEditor(test)
+                      }}
+                      className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                      title="Edit test file"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setSelectedTest(test)
+                        runTests(test.file)
+                      }}
+                      disabled={isRunning}
+                      className="p-2 text-gray-600 hover:text-green-600 hover:bg-green-50 rounded-lg transition-all disabled:opacity-50"
+                      title="Run test"
+                    >
+                      <Play className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
                 
                 {/* Test Names */}
                 {test.test_names.length > 0 && selectedTest?.file === test.file && (
-                  <div className="mt-3 pt-3 border-t">
-                    <div className="text-sm font-medium mb-2">Individual Tests:</div>
-                    <div className="space-y-1">
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <div className="text-sm font-semibold mb-3 text-gray-900">Individual Tests:</div>
+                    <div className="space-y-2">
                       {test.test_names.map((testName: string, idx: number) => (
                         <button
                           key={idx}
                           onClick={(e) => {
                             e.stopPropagation()
-                            setSelectedTestName(testName)
                             runTests(test.file, testName)
                           }}
                           disabled={isRunning}
-                          className="w-full text-left px-2 py-1 text-sm hover:bg-gray-100 rounded disabled:opacity-50 flex items-center justify-between group"
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 rounded-lg disabled:opacity-50 flex items-center justify-between group transition-all text-gray-700"
                         >
-                          <span>{testName}</span>
-                          <Play className="w-3 h-3 opacity-0 group-hover:opacity-100" />
+                          <span className="font-medium">{testName}</span>
+                          <Play className="w-3 h-3 opacity-0 group-hover:opacity-100 text-blue-500" />
                         </button>
                       ))}
                     </div>
@@ -254,51 +484,126 @@ export const VitestRunner: React.FC = () => {
         )}
       </div>
 
-      {/* Test Results */}
-      {runResult && (
-        <div className="bg-white rounded-lg border p-4">
+      {/* Console Output */}
+      {showConsole && runResult && (
+        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-medium flex items-center">
-              {getStatusIcon(runResult.success)}
-              <span className="ml-2">
-                Test Results {runResult.test_file && `- ${runResult.test_file}`}
-                {runResult.test_name && ` (${runResult.test_name})`}
-              </span>
+            <h3 className="text-lg font-semibold flex items-center text-gray-900">
+              <Terminal className="w-5 h-5 mr-2 text-purple-500" />
+              Console Output
+              {runResult.test_file && (
+                <span className="ml-2 text-sm text-gray-600">
+                  - {runResult.test_file}
+                  {runResult.test_name && ` (${runResult.test_name})`}
+                </span>
+              )}
             </h3>
-            <button
-              onClick={() => copyToClipboard(runResult.console_output.join('\n'))}
-              className="p-2 text-gray-600 hover:text-gray-800"
-            >
-              <Copy className="w-4 h-4" />
-            </button>
+            <div className="flex items-center space-x-2">
+              <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                runResult.success 
+                  ? 'bg-green-100 text-green-700' 
+                  : 'bg-red-100 text-red-700'
+              }`}>
+                {runResult.success ? (
+                  <><CheckCircle className="w-4 h-4 inline mr-1" /> PASSED</>
+                ) : (
+                  <><XCircle className="w-4 h-4 inline mr-1" /> FAILED</>
+                )}
+              </span>
+              <button
+                onClick={() => copyToClipboard(runResult.console_output.join('\n'))}
+                className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+            </div>
           </div>
           
-          <div className="bg-gray-900 text-green-400 p-4 rounded-lg font-mono text-sm overflow-x-auto">
-            <div className="mb-2 text-gray-400">
+          <div className="bg-gray-900 text-gray-300 p-4 rounded-lg font-mono text-sm overflow-x-auto max-h-96 overflow-y-auto">
+            <div className="mb-2 text-gray-500 border-b border-gray-700 pb-2">
               Duration: {runResult.duration_seconds}s | Exit Code: {runResult.exit_code}
             </div>
-            {runResult.console_output.map((line: string, index: number) => (
-              <div key={index} className="whitespace-pre-wrap">
-                {line}
+            {runResult.console_output.map((line: string, index: number) => {
+              let lineClass = 'text-gray-300'
+              if (line.includes('✓')) lineClass = 'text-green-400'
+              if (line.includes('✗')) lineClass = 'text-red-400'
+              if (line.includes('⚠️')) lineClass = 'text-yellow-400'
+              if (line.includes('Error:')) lineClass = 'text-red-500 font-semibold'
+              if (line.includes('FAIL')) lineClass = 'text-red-400 font-semibold'
+              if (line.includes('PASS')) lineClass = 'text-green-400 font-semibold'
+　　 　 　 　 return (
+                <div key={index} className={`whitespace-pre-wrap ${lineClass}`}>
+                  {line}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Failure Analysis */}
+      {runResult?.failures && runResult.failures.length > 0 && (
+        <div className="bg-white rounded-xl shadow-lg p-6 border border-red-100">
+          <h3 className="text-lg font-semibold flex items-center text-red-700 mb-4">
+            <AlertTriangle className="w-5 h-5 mr-2" />
+            Failure Analysis & Suggestions
+          </h3>
+          <div className="space-y-4">
+            {runResult.failures.map((failure: TestFailure, index: number) => (
+              <div key={index} className="border border-red-200 rounded-lg p-4 bg-red-50">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-red-800 mb-1">{failure.test}</h4>
+                    <p className="text-sm text-red-600 mb-2">{failure.file}:{failure.line}</p>
+                    <div className="bg-red-100 border border-red-200 rounded p-2 mb-3">
+                      <code className="text-sm text-red-800">{failure.error}</code>
+                    </div>
+                    <div className="flex items-center text-sm">
+                      <span className="text-blue-600 font-medium mr-2">💡 Suggestion:</span>
+                      <span className="text-gray-700">{failure.suggestion}</span>
+                    </div>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Console Output from Discovery */}
-      {discoveryResult?.console_output && discoveryResult.console_output.length > 0 && (
-        <div className="bg-white rounded-lg border p-4">
-          <h3 className="font-medium mb-4">Discovery Output</h3>
-          <div className="bg-gray-900 text-gray-300 p-4 rounded-lg font-mono text-sm overflow-x-auto">
-            {discoveryResult.console_output.map((line: string, index: number) => (
-              <div key={index} className="whitespace-pre-wrap">
-                {line}
+      {/* Test File Editor Modal */}
+      {showEditor && editingTest && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between p-6 border-b">
+              <div className="flex items-center space-x-3">
+                <Code className="w-5 h-5 text-blue-500" />
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Edit Test: {editingTest.file}
+                </h3>
               </div>
-            ))}
+              <button
+                onClick={() => setShowEditor(false)}
+                className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-all"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="flex-1 p-6 overflow-hidden">
+              <div className="bg-gray-900 rounded-lg p-4 h-full overflow-auto">
+                <textarea
+                  value={testFileContent}
+                  onChange={(e) => setTestFileContent(e.target.value)}
+                  className="w-full h-full bg-transparent text-gray-300 font-mono text-sm outline-none resize-none"
+                  spellCheck={false}
+                />
+              </div>
+            </div>
           </div>
         </div>
       )}
     </div>
   )
 }
+
+export default VitestRunner
