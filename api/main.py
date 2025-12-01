@@ -3760,10 +3760,15 @@ async def restart_buildmaster_endpoint(
         )
 
 
-# Health check endpoint (no auth required)
+# Health check endpoints (no auth required)
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint (for direct backend access)"""
+    return {"status": "healthy"}
+
+@app.get("/api/health")
+async def api_health_check():
+    """Health check endpoint (for nginx proxy access)"""
     return {"status": "healthy"}
 
 

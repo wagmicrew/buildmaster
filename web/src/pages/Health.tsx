@@ -312,41 +312,49 @@ export default function Health() {
               <div className="space-y-3">
                 <div className="flex justify-between">
                   <span className="text-slate-400">CPU Usage</span>
-                  <span className="text-white font-medium">{serverHealth.cpu_percent.toFixed(1)}%</span>
+                  <span className="text-white font-medium">
+                    {serverHealth.cpu?.percent != null ? serverHealth.cpu.percent.toFixed(1) : 'N/A'}%
+                  </span>
                 </div>
                 <div className="w-full bg-white/10 rounded-full h-2">
                   <div
                     className="bg-sky-500 h-2 rounded-full"
-                    style={{ width: `${serverHealth.cpu_percent}%` }}
+                    style={{ width: `${serverHealth.cpu?.percent ?? 0}%` }}
                   />
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Memory</span>
                   <span className="text-white font-medium">
-                    {formatBytes(serverHealth.memory_available)} / {formatBytes(serverHealth.memory_total)}
+                    {serverHealth.memory?.available_mb != null && serverHealth.memory?.total_mb != null
+                      ? `${serverHealth.memory.available_mb} MB / ${serverHealth.memory.total_mb} MB`
+                      : 'N/A'}
                   </span>
                 </div>
                 <div className="w-full bg-white/10 rounded-full h-2">
                   <div
                     className="bg-green-500 h-2 rounded-full"
-                    style={{ width: `${serverHealth.memory_percent}%` }}
+                    style={{ width: `${serverHealth.memory?.percent ?? 0}%` }}
                   />
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Disk</span>
                   <span className="text-white font-medium">
-                    {formatBytes(serverHealth.disk_free)} / {formatBytes(serverHealth.disk_total)}
+                    {serverHealth.disk?.free_gb != null && serverHealth.disk?.total_gb != null
+                      ? `${serverHealth.disk.free_gb} GB / ${serverHealth.disk.total_gb} GB`
+                      : 'N/A'}
                   </span>
                 </div>
                 <div className="w-full bg-white/10 rounded-full h-2">
                   <div
                     className="bg-purple-500 h-2 rounded-full"
-                    style={{ width: `${serverHealth.disk_percent}%` }}
+                    style={{ width: `${serverHealth.disk?.percent ?? 0}%` }}
                   />
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Uptime</span>
-                  <span className="text-white font-medium">{formatUptime(serverHealth.uptime)}</span>
+                  <span className="text-white font-medium">
+                    {serverHealth.uptime != null ? formatUptime(serverHealth.uptime) : 'N/A'}
+                  </span>
                 </div>
               </div>
             ) : (
