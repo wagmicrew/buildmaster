@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Shield, Play, FileText, Copy, CheckCircle, XCircle, AlertCircle, Loader2, RefreshCw } from 'lucide-react'
-import { useSession } from '../contexts/SessionContext'
+import api from '../services/api'
 
 interface VitestTest {
   file: string
@@ -31,7 +31,6 @@ interface VitestRunResult {
 }
 
 export const VitestRunner: React.FC = () => {
-  const { user } = useSession()
   const [environment, setEnvironment] = useState<'dev' | 'prod'>('dev')
   const [discoveryResult, setDiscoveryResult] = useState<VitestDiscoveryResult | null>(null)
   const [runResult, setRunResult] = useState<VitestRunResult | null>(null)
@@ -43,26 +42,15 @@ export const VitestRunner: React.FC = () => {
 
   // Discover tests on component mount and environment change
   useEffect(() => {
-    if (user) {
-      discoverTests()
-    }
-  }, [environment, user])
+    discoverTests()
+  }, [environment])
 
   const discoverTests = async () => {
     setIsLoading(true)
     try {
-      const response = await fetch(`/api/troubleshooting/vitest/discover/${environment}`, {
-        headers: {
-          'Authorization': `Bearer ${user?.token}`
-        }
-      })
-
-      if (response.ok) {
-        const result = await response.json()
-        setDiscoveryResult(result)
-      } else {
-        console.error('Failed to discover tests:', await response.text())
-      }
+      const response = await api.get(`/troubleshooting/vitest/discover/${environment}`)
+      const result = response.data
+      setDiscoveryResult(result)
     } catch (error) {
       console.error('Error discovering tests:', error)
     } finally {
@@ -77,21 +65,9 @@ export const VitestRunner: React.FC = () => {
       if (testFile) payload.test_file = testFile
       if (testName) payload.test_name = testName
 
-      const response = await fetch('/api/troubleshooting/vitest/run', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`
-        },
-        body: JSON.stringify(payload)
-      })
-
-      if (response.ok) {
-        const result = await response.json()
-        setRunResult(result)
-      } else {
-        console.error('Failed to run tests:', await response.text())
-      }
+      const response = await api.post('/troubleshooting/vitest/run', payload)
+      const result = response.data
+      setRunResult(result)
     } catch (error) {
       console.error('Error running tests:', error)
     } finally {
@@ -119,16 +95,9 @@ export const VitestRunner: React.FC = () => {
 
   const getReport = async () => {
     try {
-      const response = await fetch(`/api/troubleshooting/vitest/report/${environment}`, {
-        headers: {
-          'Authorization': `Bearer ${user?.token}`
-        }
-      })
-
-      if (response.ok) {
-        const result = await response.json()
-        copyToClipboard(result.copyable)
-      }
+      const response = await api.get(`/troubleshooting/vitest/report/${environment}`)
+      const result = response.data
+      copyToClipboard(result.copyable)
     } catch (error) {
       console.error('Error getting report:', error)
     }
@@ -220,7 +189,7 @@ export const VitestRunner: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-2">
-            {discoveryResult?.tests.map((test, index) => (
+            {discoveryResult?.tests.map((test: VitestTest, index: number) => (
               <div
                 key={index}
                 className={`border rounded-lg p-3 cursor-pointer transition-colors ${
@@ -261,7 +230,7 @@ export const VitestRunner: React.FC = () => {
                   <div className="mt-3 pt-3 border-t">
                     <div className="text-sm font-medium mb-2">Individual Tests:</div>
                     <div className="space-y-1">
-                      {test.test_names.map((testName, idx) => (
+                      {test.test_names.map((testName: string, idx: number) => (
                         <button
                           key={idx}
                           onClick={(e) => {
@@ -308,7 +277,7 @@ export const VitestRunner: React.FC = () => {
             <div className="mb-2 text-gray-400">
               Duration: {runResult.duration_seconds}s | Exit Code: {runResult.exit_code}
             </div>
-            {runResult.console_output.map((line, index) => (
+            {runResult.console_output.map((line: string, index: number) => (
               <div key={index} className="whitespace-pre-wrap">
                 {line}
               </div>
@@ -322,7 +291,7 @@ export const VitestRunner: React.FC = () => {
         <div className="bg-white rounded-lg border p-4">
           <h3 className="font-medium mb-4">Discovery Output</h3>
           <div className="bg-gray-900 text-gray-300 p-4 rounded-lg font-mono text-sm overflow-x-auto">
-            {discoveryResult.console_output.map((line, index) => (
+            {discoveryResult.console_output.map((line: string, index: number) => (
               <div key={index} className="whitespace-pre-wrap">
                 {line}
               </div>
