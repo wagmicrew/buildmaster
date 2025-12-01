@@ -59,26 +59,8 @@ from troubleshooting_ops import (
     get_sql_migrations,
     check_migration_applied,
     execute_sql,
-    get_env_database_config,
-    update_database_url,
-    generate_backup_commands,
-    generate_sync_commands,
-    get_database_schema,
-    query_table_data,
-    setup_test_database,
-    create_database_table,
-    drop_database_table,
-    create_database_only,
-    create_database_user,
-    get_env_files_list,
-    read_env_file,
-    write_env_file,
-    list_database_users,
-    create_database_user,
-    delete_database_user,
-    grant_table_privileges,
-    revoke_table_privileges,
-    optimize_database_tables,
+    discover_vitest_tests,
+    run_vitest_tests
 )
 from settings_ops import (
     load_settings,
@@ -2048,6 +2030,121 @@ async def database_sync_commands_endpoint(
         
         result = await generate_sync_commands(source_env, target_env, options, execute)
         return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+# ============= VITEST TESTING TOOLS =============
+
+@app.get("/api/troubleshooting/vitest/discover/{environment}", response_model=dict)
+async def vitest_discover_endpoint(
+    environment: str,
+    email: str = Depends(verify_session_token)
+):
+    """Discover Vitest tests in dev or prod environment"""
+    try:
+        if environment not in ("dev", "prod"):
+            raise HTTPException(status_code=400, detail="Invalid environment")
+        
+        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        result = await discover_vitest_tests(directory)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/troubleshooting/vitest/run", response_model=dict)
+async def vitest_run_endpoint(
+    payload: dict,
+    email: str = Depends(verify_session_token)
+):
+    """Run Vitest tests in dev or prod environment"""
+    try:
+        environment = payload.get("environment")
+        test_file = payload.get("test_file")
+        test_name = payload.get("test_name")
+        
+        if environment not in ("dev", "prod"):
+            raise HTTPException(status_code=400, detail="Invalid environment")
+        
+        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        result = await run_vitest_tests(directory, test_file, test_name)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/troubleshooting/vitest/report/{environment}", response_model=dict)
+async def vitest_report_endpoint(
+    environment: str,
+    email: str = Depends(verify_session_token)
+):
+    """Get copyable console report of Vitest tests"""
+    try:
+        if environment not in ("dev", "prod"):
+            raise HTTPException(status_code=400, detail="Invalid environment")
+        
+        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        discover_result = await discover_vitest_tests(directory)
+        
+        # Format as copyable report
+        report_lines = [
+            f"# Vitest Test Report for {environment.upper()}",
+            f"# Generated: {datetime.utcnow().isoformat()}",
+            f"# Directory: {directory}",
+            "",
+        ]
+        
+        if discover_result.get("error"):
+            report_lines.extend([
+                "❌ Error discovering tests:",
+                discover_result["error"],
+                ""
+            ])
+        else:
+            report_lines.extend(discover_result.get("console_output", []))
+            
+            tests = discover_result.get("tests", [])
+            if tests:
+                report_lines.extend([
+                    "",
+                    "# Test Files:",
+                    ""
+                ])
+                
+                for test in tests:
+                    category = "🔧" if test["is_troubleshooting"] else "📝"
+                    report_lines.append(f"{category} {test['file']}")
+                    report_lines.append(f"   Tests: {test['test_count']}, Size: {test['size_bytes']} bytes")
+                    
+                    if test["test_names"]:
+                        report_lines.append("   Test names:")
+                        for name in test["test_names"][:5]:  # Show first 5
+                            report_lines.append(f"     - {name}")
+                        if test["test_count"] > 5:
+                            report_lines.append(f"     ... and {test['test_count'] - 5} more")
+                    report_lines.append("")
+        
+        return {
+            "environment": environment,
+            "report": "\n".join(report_lines),
+            "copyable": "\n".join(report_lines)
+        }
     except HTTPException:
         raise
     except Exception as e:

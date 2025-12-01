@@ -872,6 +872,213 @@ async def update_database_url(directory: str, new_url: str, target_files: Option
     return result
 
 
+async def discover_vitest_tests(directory: str) -> Dict:
+    """Discover Vitest test files under the given project directory.
+
+    This focuses on common patterns, and especially any tests under a
+    troubleshooting-focused folder, so they can be surfaced in the UI
+    and run on demand from BuildMaster.
+    """
+    dir_path = Path(directory)
+    result: Dict = {
+        "directory": directory,
+        "tests": [],
+        "error": None,
+        "console_output": [],
+    }
+
+    if not dir_path.exists():
+        result["error"] = f"Project directory not found: {directory}"
+        return result
+
+    try:
+        patterns = (
+            "*.test.ts",
+            "*.test.tsx", 
+            "*.test.js",
+            "*.test.jsx",
+            "*.spec.ts",
+            "*.spec.tsx",
+            "*.spec.js",
+            "*.spec.jsx",
+        )
+        
+        # Prioritize troubleshooting folder if it exists
+        preferred_dirs = [
+            dir_path / "troubleshooting",
+            dir_path / "tests", 
+            dir_path / "__tests__",
+            dir_path,
+        ]
+        
+        result["console_output"].append(f"$ Discovering Vitest tests in {directory}")
+        result["console_output"].append("")
+        
+        for search_dir in preferred_dirs:
+            if not search_dir.exists():
+                continue
+                
+            result["console_output"].append(f"→ Scanning: {search_dir.relative_to(dir_path)}")
+            
+            for pattern in patterns:
+                for test_file in search_dir.glob(pattern):
+                    try:
+                        # Get relative path from project root
+                        rel_path = test_file.relative_to(dir_path)
+                        
+                        # Read file to extract test names
+                        content = test_file.read_text(encoding='utf-8')
+                        test_names = []
+                        
+                        # Extract describe/it/test blocks
+                        import re
+                        test_blocks = re.findall(r'(?:describe|it|test)\s*\(\s*["\']([^"\']+)["\']', content)
+                        test_names.extend(test_blocks)
+                        
+                        # Determine if it's in troubleshooting folder
+                        is_troubleshooting = "troubleshooting" in str(rel_path)
+                        
+                        result["tests"].append({
+                            "file": str(rel_path),
+                            "full_path": str(test_file),
+                            "test_names": test_names[:10],  # Limit to first 10 test names
+                            "test_count": len(test_names),
+                            "size_bytes": test_file.stat().st_size,
+                            "is_troubleshooting": is_troubleshooting,
+                            "category": "troubleshooting" if is_troubleshooting else "general"
+                        })
+                        
+                    except Exception as e:
+                        result["console_output"].append(f"  ⚠️  Could not read {test_file.name}: {e}")
+        
+        # Sort results: troubleshooting tests first, then by file path
+        result["tests"].sort(key=lambda x: (not x["is_troubleshooting"], x["file"]))
+        
+        result["console_output"].append(f"✓ Found {len(result['tests'])} test file(s)")
+        
+        # Group by category
+        troubleshooting_count = sum(1 for t in result["tests"] if t["is_troubleshooting"])
+        general_count = len(result["tests"]) - troubleshooting_count
+        
+        if troubleshooting_count > 0:
+            result["console_output"].append(f"  • Troubleshooting: {troubleshooting_count}")
+        if general_count > 0:
+            result["console_output"].append(f"  • General: {general_count}")
+            
+    except Exception as e:
+        result["error"] = str(e)
+        result["console_output"].append(f"❌ Error discovering tests: {e}")
+    
+    return result
+
+
+async def run_vitest_tests(directory: str, test_file: str = None, test_name: str = None) -> Dict:
+    """Run Vitest tests in the given directory.
+    
+    Args:
+        directory: Project directory (dev or prod)
+        test_file: Optional specific test file to run (relative to project root)
+        test_name: Optional specific test name to run (requires test_file)
+    """
+    dir_path = Path(directory)
+    result: Dict = {
+        "directory": directory,
+        "test_file": test_file,
+        "test_name": test_name,
+        "success": False,
+        "exit_code": None,
+        "console_output": [],
+        "error": None,
+        "duration_seconds": 0,
+    }
+    
+    if not dir_path.exists():
+        result["error"] = f"Project directory not found: {directory}"
+        return result
+    
+    try:
+        import time
+        start_time = time.time()
+        
+        # Check if package.json exists and has vitest script
+        package_json = dir_path / "package.json"
+        if not package_json.exists():
+            result["error"] = "package.json not found"
+            result["console_output"].append("❌ package.json not found")
+            return result
+        
+        package_data = json.loads(package_json.read_text())
+        scripts = package_data.get("scripts", {})
+        
+        # Look for vitest script
+        vitest_script = None
+        for script_name in ["test", "vitest", "test:unit", "test:ui"]:
+            if script_name in scripts and "vitest" in scripts[script_name]:
+                vitest_script = script_name
+                break
+        
+        if not vitest_script:
+            result["error"] = "No vitest script found in package.json"
+            result["console_output"].append("❌ No vitest script found in package.json")
+            result["console_output"].append("Available scripts: " + ", ".join(scripts.keys()))
+            return result
+        
+        # Build command
+        cmd = ["npm", "run", vitest_script, "--", "--run", "--reporter=verbose"]
+        
+        if test_file:
+            # Run specific test file
+            test_path = dir_path / test_file
+            if not test_path.exists():
+                result["error"] = f"Test file not found: {test_file}"
+                result["console_output"].append(f"❌ Test file not found: {test_file}")
+                return result
+            cmd.append(str(test_path))
+            
+            if test_name:
+                # Run specific test
+                cmd.extend(["-t", test_name])
+        
+        result["console_output"].append(f"$ Running Vitest in {directory}")
+        result["console_output"].append(f"→ Command: {' '.join(cmd)}")
+        result["console_output"].append("")
+        
+        # Run the command
+        process = subprocess.run(
+            cmd,
+            cwd=dir_path,
+            capture_output=True,
+            text=True,
+            timeout=120  # 2 minute timeout
+        )
+        
+        result["exit_code"] = process.returncode
+        result["success"] = process.returncode == 0
+        result["duration_seconds"] = round(time.time() - start_time, 2)
+        
+        # Add output to console
+        if process.stdout:
+            result["console_output"].extend(process.stdout.split('\n'))
+        
+        if process.stderr:
+            result["console_output"].extend(["", "STDERR:"] + process.stderr.split('\n'))
+        
+        # Add summary
+        status = "✓ PASSED" if result["success"] else "✗ FAILED"
+        result["console_output"].append("")
+        result["console_output"].append(f"{status} (exit code: {process.returncode}, duration: {result['duration_seconds']}s)")
+        
+    except subprocess.TimeoutExpired:
+        result["error"] = "Test execution timed out (120s)"
+        result["console_output"].append("❌ Test execution timed out after 120 seconds")
+        
+    except Exception as e:
+        result["error"] = str(e)
+        result["console_output"].append(f"❌ Error running tests: {e}")
+    
+    return result
+
+
 # ============= DATABASE SYNC TOOLS =============
 
 async def generate_sync_commands(source_env: str, target_env: str, options: Dict = None, execute: bool = False) -> Dict:
