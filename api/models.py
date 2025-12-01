@@ -220,8 +220,10 @@ class EnvironmentHealthResponse(BaseModel):
     """Environment health response model"""
     dev_env_exists: bool
     prod_env_exists: bool
+    app_env_exists: bool
     pm2_dev_running: bool
     pm2_prod_running: bool
+    pm2_app_running: bool
     git_repo_status: str
     timestamp: datetime
 

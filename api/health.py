@@ -272,16 +272,21 @@ async def get_redis_health() -> RedisHealthResponse:
 
 async def get_environment_health() -> EnvironmentHealthResponse:
     """Get environment health status"""
+    from config import get_environment_directory, get_pm2_app_name
+    
     dev_dir = Path(settings.DEV_DIR)
     prod_dir = Path(settings.PROD_DIR)
+    app_dir = Path(settings.APP_DIR)
     
     # Check if directories exist
     dev_env_exists = dev_dir.exists() and (dev_dir / ".env.local").exists()
     prod_env_exists = prod_dir.exists() and (prod_dir / ".env.production").exists()
+    app_env_exists = app_dir.exists() and (app_dir / ".env.local").exists()
     
     # Check PM2 processes
     pm2_dev_running = is_pm2_running(settings.PM2_DEV_APP)
     pm2_prod_running = is_pm2_running(settings.PM2_PROD_APP)
+    pm2_app_running = is_pm2_running(settings.PM2_APP_APP)
     
     # Check git repo status
     git_repo_status = "unknown"
@@ -305,8 +310,10 @@ async def get_environment_health() -> EnvironmentHealthResponse:
     return EnvironmentHealthResponse(
         dev_env_exists=dev_env_exists,
         prod_env_exists=prod_env_exists,
+        app_env_exists=app_env_exists,
         pm2_dev_running=pm2_dev_running,
         pm2_prod_running=pm2_prod_running,
+        pm2_app_running=pm2_app_running,
         git_repo_status=git_repo_status,
         timestamp=datetime.utcnow()
     )

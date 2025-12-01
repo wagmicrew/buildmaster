@@ -30,10 +30,12 @@ class Settings(BaseSettings):
     # Directories
     DEV_DIR: str = "/var/www/dintrafikskolax_dev"
     PROD_DIR: str = "/var/www/dintrafikskolax_prod"
+    APP_DIR: str = "/var/www/dintrafikskolax_app"
     
     # PM2 Configuration
     PM2_DEV_APP: str = "dintrafikskolax-dev"
     PM2_PROD_APP: str = "dintrafikskolax-prod"
+    PM2_APP_APP: str = "dintrafikskolax-app"
     
     # Database
     DATABASE_URL: Optional[str] = None
@@ -61,4 +63,52 @@ settings = Settings()
 # Ensure directories exist
 Path(settings.BUILD_LOG_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.BUILD_DATA_DIR).mkdir(parents=True, exist_ok=True)
+
+
+def get_environment_directory(environment: str) -> str:
+    """Get the directory path for the given environment.
+    
+    Args:
+        environment: Environment name ('dev', 'prod', or 'app')
+        
+    Returns:
+        Directory path for the environment
+        
+    Raises:
+        ValueError: If environment is not one of 'dev', 'prod', or 'app'
+    """
+    env_map = {
+        "dev": settings.DEV_DIR,
+        "prod": settings.PROD_DIR,
+        "app": settings.APP_DIR,
+    }
+    
+    if environment not in env_map:
+        raise ValueError(f"Invalid environment '{environment}'. Must be one of: dev, prod, app")
+    
+    return env_map[environment]
+
+
+def get_pm2_app_name(environment: str) -> str:
+    """Get the PM2 app name for the given environment.
+    
+    Args:
+        environment: Environment name ('dev', 'prod', or 'app')
+        
+    Returns:
+        PM2 app name for the environment
+        
+    Raises:
+        ValueError: If environment is not one of 'dev', 'prod', or 'app'
+    """
+    env_map = {
+        "dev": settings.PM2_DEV_APP,
+        "prod": settings.PM2_PROD_APP,
+        "app": settings.PM2_APP_APP,
+    }
+    
+    if environment not in env_map:
+        raise ValueError(f"Invalid environment '{environment}'. Must be one of: dev, prod, app")
+    
+    return env_map[environment]
 

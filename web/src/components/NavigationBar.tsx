@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Home, GitBranch, Play, Rocket, Activity, Database, Wrench, Settings, LogOut, Loader } from 'lucide-react'
+import { Home, GitBranch, Play, Rocket, Activity, Database, Wrench, Settings, LogOut, Loader, TestTube } from 'lucide-react'
 import api from '../services/api'
 import { authService } from '../services/auth'
 
@@ -45,6 +45,11 @@ const navItems: NavItem[] = [
     path: '/troubleshooting',
     label: 'Troubleshooting',
     icon: Wrench
+  },
+  {
+    path: '/vitest',
+    label: 'Vitest',
+    icon: TestTube
   },
   {
     path: '/settings',

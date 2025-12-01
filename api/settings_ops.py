@@ -30,6 +30,14 @@ DEFAULT_SETTINGS = {
             "autoDetected": True
         }
     },
+    "app": {
+        "path": "/var/www/dintrafikskolax_app",
+        "git": {
+            "remote": "origin",
+            "branch": "main",
+            "autoDetected": True
+        }
+    },
     "database": {
         "useLocalhost": True,
         "host": "localhost",
@@ -38,6 +46,7 @@ DEFAULT_SETTINGS = {
         "masterPassword": "",
         "devDatabase": "dintrafikskolax_dev",
         "prodDatabase": "dintrafikskolax_prod",
+        "appDatabase": "dintrafikskolax_app",
         "sslMode": "prefer"
     },
     "build": {
@@ -45,6 +54,7 @@ DEFAULT_SETTINGS = {
         "detectedScripts": [],
         "devBuildScript": "npm run build",
         "prodBuildScript": "npm run build",
+        "appBuildScript": "npm run build",
         "buildDirectory": "",
         "outputDirectory": ".next"
     },
@@ -62,6 +72,14 @@ DEFAULT_SETTINGS = {
             "mode": "cluster",
             "instances": 4,
             "maxMemory": "1G",
+            "autoRestart": True,
+            "watchEnabled": False
+        },
+        "app": {
+            "name": "dintrafikskolax-app",
+            "mode": "fork",
+            "instances": 1,
+            "maxMemory": "512M",
             "autoRestart": True,
             "watchEnabled": False
         }
@@ -83,6 +101,16 @@ DEFAULT_SETTINGS = {
             "sitesEnabledPath": "/etc/nginx/sites-enabled/dintrafikskolax-prod",
             "serverName": "dintrafikskolahlm.se",
             "port": 3001,
+            "sslEnabled": True,
+            "sslCertPath": "/etc/letsencrypt/live/dintrafikskolahlm.se/fullchain.pem",
+            "sslKeyPath": "/etc/letsencrypt/live/dintrafikskolahlm.se/privkey.pem"
+        },
+        "app": {
+            "siteName": "dintrafikskolax-app",
+            "configPath": "/etc/nginx/sites-available/dintrafikskolax-app",
+            "sitesEnabledPath": "/etc/nginx/sites-enabled/dintrafikskolax-app",
+            "serverName": "app.dintrafikskolahlm.se",
+            "port": 3002,
             "sslEnabled": True,
             "sslCertPath": "/etc/letsencrypt/live/dintrafikskolahlm.se/fullchain.pem",
             "sslKeyPath": "/etc/letsencrypt/live/dintrafikskolahlm.se/privkey.pem"

@@ -972,7 +972,15 @@ async def discover_vitest_tests(directory: str) -> Dict:
     return result
 
 
-async def run_vitest_tests(directory: str, test_file: str = None, test_name: str = None) -> Dict:
+async def run_vitest_tests(
+    directory: str,
+    test_file: str = None,
+    test_name: str = None,
+    verbose: bool = True,
+    coverage: bool = False,
+    reporter: str = "verbose",
+    timeout: int = 5000
+) -> Dict:
     """Run Vitest tests in the given directory.
     
     Args:
@@ -1024,7 +1032,26 @@ async def run_vitest_tests(directory: str, test_file: str = None, test_name: str
             return result
         
         # Build command
-        cmd = ["npm", "run", vitest_script, "--", "--run", "--reporter=verbose"]
+        cmd = ["npm", "run", vitest_script, "--", "--run"]
+        
+        # Add reporter
+        if reporter:
+            cmd.append(f"--reporter={reporter}")
+        else:
+            cmd.append("--reporter=verbose")
+        
+        # Add verbose flag
+        if verbose:
+            cmd.append("--reporter=verbose")
+        
+        # Add coverage
+        if coverage:
+            cmd.append("--coverage")
+        
+        # Add timeout (convert ms to seconds for Vitest)
+        if timeout:
+            timeout_seconds = timeout // 1000
+            cmd.extend(["--testTimeout", str(timeout_seconds)])
         
         if test_file:
             # Run specific test file

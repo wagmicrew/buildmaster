@@ -8,6 +8,7 @@ import Health from './pages/Health'
 import DatabaseAdmin from './pages/DatabaseAdmin'
 import Troubleshooting from './pages/Troubleshooting'
 import Settings from './pages/Settings'
+import Vitest from './pages/Vitest'
 import { authService } from './services/auth'
 import Layout from './components/Layout'
 
@@ -99,6 +100,16 @@ function App() {
             <PrivateRoute>
               <Layout>
                 <Settings />
+              </Layout>
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/vitest"
+          element={
+            <PrivateRoute>
+              <Layout>
+                <Vitest />
               </Layout>
             </PrivateRoute>
           }

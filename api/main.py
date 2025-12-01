@@ -8,7 +8,7 @@ import uvicorn
 import os
 import shutil
 
-from config import settings
+from config import settings, get_environment_directory, get_pm2_app_name
 from models import (
     OTPRequest,
     OTPVerify,
@@ -194,13 +194,13 @@ async def database_env_config_endpoint(
     currently configured. This is read-only and does not modify any files.
     """
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid environment. Use 'dev' or 'prod'."
+                detail="Invalid environment. Use 'dev', 'prod', or 'app'."
             )
 
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         config = await get_env_database_config(directory)
         config["environment"] = environment
         return config
@@ -523,7 +523,7 @@ async def build_scripts_all_endpoint(
     """Get all build scripts from package.json with full details"""
     try:
         import json
-        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        project_dir = get_environment_directory(environment)
         package_json_path = Path(project_dir) / "package.json"
         
         if not package_json_path.exists():
@@ -700,7 +700,7 @@ async def build_scripts_save_endpoint(
                 return {"success": True, "message": f"Custom script '{name}' updated"}
         
         # Update package.json
-        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        project_dir = get_environment_directory(environment)
         package_json_path = Path(project_dir) / "package.json"
         
         if not package_json_path.exists():
@@ -881,7 +881,7 @@ async def build_scripts_mjs_endpoint(
         import os
         import glob
         
-        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        project_dir = get_environment_directory(environment)
         
         # Find all .mjs files recursively (but not in node_modules)
         mjs_files = []
@@ -964,7 +964,7 @@ async def build_scripts_env_endpoint(
     try:
         import os
         
-        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        project_dir = get_environment_directory(environment)
         
         env_files = []
         
@@ -1816,7 +1816,7 @@ async def cache_status_endpoint(
 ):
     """Get cache status for dev or prod"""
     try:
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         status_data = await get_cache_status(directory)
         return status_data
     except Exception as e:
@@ -1834,7 +1834,7 @@ async def clear_cache_endpoint(
 ):
     """Clear cache for dev or prod"""
     try:
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         result = await clear_cache(directory, cache_type)
         return result
     except Exception as e:
@@ -1882,7 +1882,7 @@ async def packages_endpoint(
 ):
     """Get package versions"""
     try:
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         packages = await get_package_versions(directory)
         return packages
     except Exception as e:
@@ -1948,7 +1948,7 @@ async def env_analysis_endpoint(
 ):
     """Analyze .env files"""
     try:
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         analysis = await analyze_env_file(directory)
         return analysis
     except Exception as e:
@@ -1965,7 +1965,7 @@ async def sql_migrations_endpoint(
 ):
     """Get SQL migration files"""
     try:
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         migrations = await get_sql_migrations(directory)
         return migrations
     except Exception as e:
@@ -1983,7 +1983,7 @@ async def check_migration_applied_endpoint(
 ):
     """Check if a specific migration has been applied"""
     try:
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         result = await check_migration_applied(directory, filename)
         return result
     except Exception as e:
@@ -2058,10 +2058,10 @@ async def vitest_discover_endpoint(
 ):
     """Discover Vitest tests in dev or prod environment"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         result = await discover_vitest_tests(directory)
         return result
     except HTTPException:
@@ -2078,17 +2078,29 @@ async def vitest_run_endpoint(
     payload: dict,
     email: str = Depends(verify_session_token)
 ):
-    """Run Vitest tests in dev or prod environment"""
+    """Run Vitest tests in dev, prod, or app environment"""
     try:
         environment = payload.get("environment")
         test_file = payload.get("test_file")
         test_name = payload.get("test_name")
+        verbose = payload.get("verbose", True)
+        coverage = payload.get("coverage", False)
+        reporter = payload.get("reporter", "verbose")
+        timeout = payload.get("timeout", 5000)
         
-        if environment not in ("dev", "prod"):
-            raise HTTPException(status_code=400, detail="Invalid environment")
+        if environment not in ("dev", "prod", "app"):
+            raise HTTPException(status_code=400, detail="Invalid environment. Use 'dev', 'prod', or 'app'")
         
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
-        result = await run_vitest_tests(directory, test_file, test_name)
+        directory = get_environment_directory(environment)
+        result = await run_vitest_tests(
+            directory,
+            test_file,
+            test_name,
+            verbose=verbose,
+            coverage=coverage,
+            reporter=reporter,
+            timeout=timeout
+        )
         return result
     except HTTPException:
         raise
@@ -2106,10 +2118,10 @@ async def vitest_report_endpoint(
 ):
     """Get copyable console report of Vitest tests"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         discover_result = await discover_vitest_tests(directory)
         
         # Format as copyable report
@@ -2175,7 +2187,7 @@ async def database_backup_commands_endpoint(
 ):
     """Generate and optionally execute backup commands for environment"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         result = await generate_backup_commands(environment, backup_type, execute)
@@ -2285,7 +2297,7 @@ async def restore_backup_file(
         result["console_output"].append("")
         
         # Validate environment
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         # Check if file exists
@@ -2296,7 +2308,7 @@ async def restore_backup_file(
             return result
         
         # Get database configuration
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         from troubleshooting_ops import get_env_database_config
         config = await get_env_database_config(directory)
         
@@ -2420,7 +2432,7 @@ async def database_schema_endpoint(
 ):
     """Get database schema for CRUD explorer"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         result = await get_database_schema(environment)
@@ -2444,7 +2456,7 @@ async def database_query_endpoint(
 ):
     """Query table data for CRUD explorer"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         result = await query_table_data(environment, table_name, limit, offset)
@@ -2468,7 +2480,7 @@ async def create_table_endpoint(
 ):
     """Create a new database table"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         table_name = payload.get("table_name")
@@ -2496,7 +2508,7 @@ async def drop_table_endpoint(
 ):
     """Delete a database table"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         result = await drop_database_table(environment, table_name)
@@ -2519,7 +2531,7 @@ async def list_database_users_endpoint(
 ):
     """List all database users"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         result = await list_database_users(environment)
@@ -2541,7 +2553,7 @@ async def create_database_user_endpoint(
 ):
     """Create a new database user"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         username = payload.get("username")
@@ -2570,7 +2582,7 @@ async def delete_database_user_endpoint(
 ):
     """Delete a database user"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         result = await delete_database_user(environment, username)
@@ -2599,7 +2611,7 @@ async def grant_privileges_endpoint(
         if not all([environment, username, table_name, privileges]):
             raise HTTPException(status_code=400, detail="Missing required fields")
         
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         result = await grant_table_privileges(environment, username, table_name, privileges)
@@ -2628,7 +2640,7 @@ async def revoke_privileges_endpoint(
         if not all([environment, username, table_name, privileges]):
             raise HTTPException(status_code=400, detail="Missing required fields")
         
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         result = await revoke_table_privileges(environment, username, table_name, privileges)
@@ -2655,7 +2667,7 @@ async def optimize_tables_endpoint(
         if not environment:
             raise HTTPException(status_code=400, detail="Missing environment")
         
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         result = await optimize_database_tables(environment, table_names)
@@ -2678,10 +2690,10 @@ async def get_env_files_endpoint(
 ):
     """Get list of .env* files in environment directory"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         from troubleshooting_ops import get_env_files_list
         result = await get_env_files_list(directory)
         return result
@@ -2702,7 +2714,7 @@ async def read_env_file_endpoint(
 ):
     """Read content of a specific .env file"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         # Security check - only allow .env* files
@@ -2712,7 +2724,7 @@ async def read_env_file_endpoint(
         if ".." in filename or "/" in filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
         
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         from troubleshooting_ops import read_env_file
         result = await read_env_file(directory, filename)
         return result
@@ -2734,7 +2746,7 @@ async def write_env_file_endpoint(
 ):
     """Write content to a specific .env file"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         # Security check - only allow .env* files
@@ -2746,7 +2758,7 @@ async def write_env_file_endpoint(
         
         content = payload.get("content", "")
         
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         from troubleshooting_ops import write_env_file
         result = await write_env_file(directory, filename, content)
         return result
@@ -2768,7 +2780,7 @@ async def get_database_selector_endpoint(
 ):
     """Get selected database and available databases for an environment"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         from database_selector import get_selected_database, list_available_databases
@@ -2799,7 +2811,7 @@ async def set_database_selector_endpoint(
 ):
     """Set selected database for an environment"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         database_url = payload.get("database_url")
@@ -2843,7 +2855,7 @@ async def setup_test_database_endpoint(
         if not all([db_name, username, password]):
             raise HTTPException(status_code=400, detail="Missing required fields")
         
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment. Use 'dev' or 'prod'")
         
         result = await setup_test_database(db_name, username, password, environment, clone_from_prod)
@@ -3024,7 +3036,7 @@ async def create_database_endpoint(
         if not db_name:
             raise HTTPException(status_code=400, detail="Missing db_name")
         
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment. Use 'dev' or 'prod'")
         
         result = await create_database_only(db_name, environment)
@@ -3052,7 +3064,7 @@ async def create_user_endpoint(
         if not username or not password:
             raise HTTPException(status_code=400, detail="Missing username or password")
         
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment. Use 'dev' or 'prod'")
         
         result = await create_database_user(username, password, environment)
@@ -3073,10 +3085,10 @@ async def get_env_files_endpoint(
 ):
     """Get list of all .env* files for an environment"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment. Use 'dev' or 'prod'")
         
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         result = await get_env_files_list(directory)
         return result
     except HTTPException:
@@ -3096,14 +3108,14 @@ async def read_env_file_endpoint(
 ):
     """Read content of a specific .env file"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment. Use 'dev' or 'prod'")
         
         # Security check - only allow .env* files
         if not filename.startswith(".env") or ".." in filename or "/" in filename:
             raise HTTPException(status_code=400, detail="Invalid filename. Only .env* files are allowed")
         
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         result = await read_env_file(directory, filename)
         return result
     except HTTPException:
@@ -3124,7 +3136,7 @@ async def write_env_file_endpoint(
 ):
     """Write content to a specific .env file"""
     try:
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment. Use 'dev' or 'prod'")
         
         # Security check - only allow .env* files
@@ -3135,7 +3147,7 @@ async def write_env_file_endpoint(
         if content is None:
             raise HTTPException(status_code=400, detail="Missing content")
         
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         result = await write_env_file(directory, filename, content)
         return result
     except HTTPException:
@@ -3159,13 +3171,13 @@ async def update_database_url_endpoint(
         database_url = payload.get("database_url")
         target_files = payload.get("files") or [".env.local"]
         
-        if environment not in ("dev", "prod"):
+        if environment not in ("dev", "prod", "app"):
             raise HTTPException(status_code=400, detail="Invalid environment")
         
         if not database_url:
             raise HTTPException(status_code=400, detail="Missing database_url")
         
-        directory = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        directory = get_environment_directory(environment)
         result = await update_database_url(directory, database_url, target_files)
         
         if result.get("error"):
@@ -3786,7 +3798,7 @@ async def sanity_check_endpoint(
     Checks: System, Node, Nginx, React, Build, Config, Network
     """
     try:
-        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        project_dir = get_environment_directory(environment)
         report = await run_sanity_check(project_dir, environment)
         return report.to_dict()
     except Exception as e:
@@ -3809,7 +3821,7 @@ async def sanity_quick_check_endpoint(
         from sanity_checker import SanityChecker
         from datetime import datetime
         
-        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        project_dir = get_environment_directory(environment)
         checker = SanityChecker(project_dir, environment)
         
         # Run only essential checks
@@ -3866,7 +3878,7 @@ async def sanity_fix_endpoint(
         
         fix_type = payload.get("fix_type", "")
         environment = payload.get("environment", "dev")
-        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        project_dir = get_environment_directory(environment)
         
         results = []
         
@@ -3956,7 +3968,7 @@ async def sanity_report_endpoint(
     Format: console (copyable text) or json
     """
     try:
-        project_dir = settings.DEV_DIR if environment == "dev" else settings.PROD_DIR
+        project_dir = get_environment_directory(environment)
         report = await run_sanity_check(project_dir, environment)
         
         if format == "json":

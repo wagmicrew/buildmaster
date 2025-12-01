@@ -592,8 +592,16 @@ export default function Health() {
                   )}
                 </div>
                 <div className="flex justify-between">
+                  <span className="text-slate-400">App Environment</span>
+                  {envHealth?.app_env_exists ? (
+                    <CheckCircle className="text-green-400" size={20} />
+                  ) : (
+                    <XCircle className="text-rose-400" size={20} />
+                  )}
+                </div>
+                <div className="flex justify-between">
                   <span className="text-slate-400">PM2 Dev</span>
-                  {envHealth.pm2_dev_running ? (
+                  {envHealth?.pm2_dev_running ? (
                     <CheckCircle className="text-green-400" size={20} />
                   ) : (
                     <XCircle className="text-rose-400" size={20} />
@@ -601,7 +609,15 @@ export default function Health() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">PM2 Prod</span>
-                  {envHealth.pm2_prod_running ? (
+                  {envHealth?.pm2_prod_running ? (
+                    <CheckCircle className="text-green-400" size={20} />
+                  ) : (
+                    <XCircle className="text-rose-400" size={20} />
+                  )}
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">PM2 App</span>
+                  {envHealth?.pm2_app_running ? (
                     <CheckCircle className="text-green-400" size={20} />
                   ) : (
                     <XCircle className="text-rose-400" size={20} />
