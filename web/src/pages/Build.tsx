@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import api from '../services/api'
-import { Loader, CheckCircle, XCircle, Clock, AlertTriangle, Zap, Settings, History, Cpu, Square, Terminal, AlertTriangle as AlertTriangleIcon, FileCode, Shield } from 'lucide-react'
+import { Loader, CheckCircle, XCircle, Clock, AlertTriangle, Zap, Settings, History, Cpu, Square, Terminal, AlertTriangle as AlertTriangleIcon, FileCode, Shield, Play } from 'lucide-react'
 import BuildProgress from '../components/BuildProgress'
 import BuildConfigTab from '../components/BuildConfigTab'
 import BuildHistoryTab from '../components/BuildHistoryTab'
@@ -10,8 +10,9 @@ import SystemMetricsPanel from '../components/SystemMetricsPanel'
 import WorkerAccordion from '../components/WorkerAccordion'
 import ConsoleModal from '../components/ConsoleModal'
 import SanityChecker from '../components/SanityChecker'
+import VitestRunner from '../components/VitestRunner'
 
-type TabType = 'config' | 'history' | 'active' | 'logs' | 'scripts' | 'sanity'
+type TabType = 'config' | 'history' | 'active' | 'logs' | 'scripts' | 'sanity' | 'vitest'
 
 export default function Build() {
   const [activeTab, setActiveTab] = useState<TabType>('config')
@@ -127,6 +128,7 @@ export default function Build() {
     { id: 'config' as TabType, label: 'Configuration', icon: Settings },
     { id: 'scripts' as TabType, label: 'Scripts', icon: FileCode },
     { id: 'sanity' as TabType, label: 'Sanity Check', icon: Shield },
+    { id: 'vitest' as TabType, label: 'Vitest Tests', icon: Play },
     { id: 'history' as TabType, label: 'History', icon: History },
     { id: 'active' as TabType, label: 'Active Build', icon: Cpu },
     { id: 'logs' as TabType, label: 'Logs', icon: Clock },
@@ -317,6 +319,9 @@ export default function Build() {
 
           {/* Sanity Check Tab */}
           {activeTab === 'sanity' && <SanityChecker />}
+
+          {/* Vitest Tests Tab */}
+          {activeTab === 'vitest' && <VitestRunner />}
 
           {/* History Tab */}
           {activeTab === 'history' && <BuildHistoryTab />}
