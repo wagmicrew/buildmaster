@@ -15,7 +15,12 @@
     "test:coverage": "vitest run --coverage",
     "test:app": "cross-env TEST_ENV=app vitest",
     "test:dev": "cross-env TEST_ENV=dev vitest",
-    "test:prod": "cross-env TEST_ENV=prod vitest"
+    "test:prod": "cross-env TEST_ENV=prod vitest",
+    "test:dintrafikskola": "cross-env TEST_PROJECT=dintrafikskola_dev vitest --config vite.config.multi-project.ts",
+    "test:dintrafikskola:prod": "cross-env TEST_PROJECT=dintrafikskola_prod TEST_ENV=prod vitest --config vite.config.multi-project.ts",
+    "test:trafikapp": "cross-env TEST_PROJECT=trafikapp vitest --config vite.config.multi-project.ts",
+    "test:all": "npm run test:buildmaster && npm run test:dintrafikskola && npm run test:trafikapp",
+    "test:buildmaster": "cross-env TEST_PROJECT=buildmaster vitest"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.12.2",

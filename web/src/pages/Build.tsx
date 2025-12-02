@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import api from '../services/api'
-import { Loader, CheckCircle, XCircle, Clock, AlertTriangle, Zap, Settings, History, Cpu, Square, Terminal, AlertTriangle as AlertTriangleIcon, FileCode, Shield, Play } from 'lucide-react'
+import { Loader, CheckCircle, XCircle, Clock, AlertTriangle, Zap, Settings, History, Cpu, Square, Terminal, AlertTriangle as AlertTriangleIcon, FileCode, Shield, Play, Globe } from 'lucide-react'
 import BuildProgress from '../components/BuildProgress'
 import BuildConfigTab from '../components/BuildConfigTab'
 import BuildHistoryTab from '../components/BuildHistoryTab'
@@ -12,8 +12,9 @@ import ConsoleModal from '../components/ConsoleModal'
 import SanityChecker from '../components/SanityChecker'
 import VitestRunner from '../components/VitestRunner'
 import TurbopackWorkers from '../components/TurbopackWorkers'
+import TrafikAppManager from '../components/TrafikAppManager'
 
-type TabType = 'config' | 'history' | 'active' | 'logs' | 'scripts' | 'sanity' | 'vitest'
+type TabType = 'config' | 'history' | 'active' | 'logs' | 'scripts' | 'sanity' | 'vitest' | 'trafikapp'
 
 export default function Build() {
   const [activeTab, setActiveTab] = useState<TabType>('config')
@@ -105,6 +106,7 @@ export default function Build() {
     { id: 'scripts' as TabType, label: 'Scripts', icon: FileCode },
     { id: 'sanity' as TabType, label: 'Sanity Check', icon: Shield },
     { id: 'vitest' as TabType, label: 'Vitest Tests', icon: Play },
+    { id: 'trafikapp' as TabType, label: 'TrafikApp', icon: Globe },
     { id: 'history' as TabType, label: 'History', icon: History },
     { id: 'active' as TabType, label: 'Active Build', icon: Cpu },
     { id: 'logs' as TabType, label: 'Logs', icon: Clock },
@@ -298,6 +300,7 @@ export default function Build() {
 
           {/* Vitest Tests Tab */}
           {activeTab === 'vitest' && <VitestRunner />}
+          {activeTab === 'trafikapp' && <TrafikAppManager />}
 
           {/* History Tab */}
           {activeTab === 'history' && <BuildHistoryTab />}

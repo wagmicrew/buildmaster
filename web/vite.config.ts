@@ -20,6 +20,17 @@ export default defineConfig(({ mode }) => {
       environment: 'jsdom',
       setupFiles: ['./src/test/setup.ts'],
       css: true,
+      include: [
+        'src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}',
+        'tests/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'
+      ],
+      exclude: [
+        'node_modules/',
+        'dist/',
+        'build/',
+        '**/*.config.*',
+        '**/mockData'
+      ],
       env: {
         TEST_ENV: testEnv,
         NODE_ENV: testEnv === 'prod' ? 'production' : 'development',
@@ -30,6 +41,7 @@ export default defineConfig(({ mode }) => {
         exclude: [
           'node_modules/',
           'src/test/',
+          'tests/',
           '**/*.d.ts',
           '**/*.config.*',
           '**/mockData',

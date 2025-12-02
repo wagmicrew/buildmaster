@@ -1,0 +1,22 @@
+{
+  "api": {
+    "port": 8889,
+    "health_check_url": "http://localhost:8889/health",
+    "command": "python main.py",
+    "working_directory": "c:/projects/buildmaster/api",
+    "env_file": ".env.production",
+    "auto_restart": true,
+    "max_restarts": 5,
+    "restart_delay": 3
+  },
+  "build_worker": {
+    "port": 8890,
+    "health_check_url": "http://localhost:8890/health",
+    "command": "python build_worker.py",
+    "working_directory": "c:/projects/buildmaster/api",
+    "env_file": ".env.production",
+    "auto_restart": true,
+    "max_restarts": 3,
+    "restart_delay": 5
+  }
+}

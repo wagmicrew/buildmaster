@@ -1,0 +1,29 @@
+{
+  "dintrafikskola_dev": {
+    "path": "/var/www/dintrafikskolax_dev",
+    "repo_url": "https://github.com/your-org/dintrafikskola.git",
+    "branch": "develop",
+    "domain": "dev.dintrafikskolahlm.se",
+    "build_command": "npm run build:dev",
+    "deploy_command": "systemctl reload nginx",
+    "health_url": "https://dev.dintrafikskolahlm.se/health"
+  },
+  "dintrafikskola_prod": {
+    "path": "/var/www/dintrafikskolax_prod",
+    "repo_url": "https://github.com/your-org/dintrafikskola.git",
+    "branch": "main",
+    "domain": "dintrafikskolahlm.se",
+    "build_command": "npm run build:prod",
+    "deploy_command": "systemctl reload nginx",
+    "health_url": "https://dintrafikskolahlm.se/health"
+  },
+  "trafikapp": {
+    "path": "/var/www/trafikapp",
+    "repo_url": "https://github.com/your-org/trafikapp.git",
+    "branch": "main",
+    "domain": "app.dintrafikskolahlm.se",
+    "build_command": "npm run build",
+    "deploy_command": "systemctl reload nginx",
+    "health_url": "https://app.dintrafikskolahlm.se/health"
+  }
+}

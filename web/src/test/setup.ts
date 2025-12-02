@@ -40,3 +40,4 @@ global.IntersectionObserver = class IntersectionObserver {
 // Set test environment mode
 process.env.VITEST = 'true'
 
+

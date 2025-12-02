@@ -116,3 +116,4 @@ Coverage reports are generated in the `coverage/` directory.
 - Use `@testing-library/user-event` for user interaction testing
 - Check the [Vitest documentation](https://vitest.dev/guide/) for more details
 
+
