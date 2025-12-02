@@ -1,12 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Card, CardHeader, CardTitle, CardContent } from './ui/card'
-import { Button } from './ui/button'
-import { Badge } from './ui/badge'
 import { 
   GitBranch, 
-  Build, 
+  Hammer, 
   Rocket, 
-  Heart, 
   Settings, 
   RefreshCw,
   CheckCircle,
@@ -47,7 +43,7 @@ const statusColors = {
 const statusIcons = {
   idle: Clock,
   syncing: RefreshCw,
-  building: Build,
+  building: Hammer,
   deploying: Rocket,
   success: CheckCircle,
   error: XCircle
@@ -98,7 +94,7 @@ export default function TrafikAppManager() {
   }
 
   const runAction = async (projectName: string, action: string) => {
-    setActionLoading(prev => ({ ...prev, [`${projectName}-${action}`]: true }))
+    setActionLoading((prev: any) => ({ ...prev, [`${projectName}-${action}`]: true }))
     
     try {
       const response = await fetch(`/api/trafikapp/projects/${projectName}/${action}`, {
@@ -114,12 +110,12 @@ export default function TrafikAppManager() {
     } catch (error) {
       console.error(`Failed to ${action} ${projectName}:`, error)
     } finally {
-      setActionLoading(prev => ({ ...prev, [`${projectName}-${action}`]: false }))
+      setActionLoading((prev: any) => ({ ...prev, [`${projectName}-${action}`]: false }))
     }
   }
 
   const runPipeline = async (projectName: string) => {
-    setActionLoading(prev => ({ ...prev, [`${projectName}-pipeline`]: true }))
+    setActionLoading((prev: any) => ({ ...prev, [`${projectName}-pipeline`]: true }))
     
     try {
       const response = await fetch('/api/trafikapp/pipeline', {
@@ -138,9 +134,10 @@ export default function TrafikAppManager() {
     } catch (error) {
       console.error(`Failed to run pipeline for ${projectName}:`, error)
     } finally {
-      setActionLoading(prev => ({ ...prev, [`${projectName}-pipeline`]: false }))
+      setActionLoading((prev: any) => ({ ...prev, [`${projectName}-pipeline`]: false }))
     }
   }
+
 
   const formatTime = (timestamp?: number) => {
     if (!timestamp) return 'Never'
@@ -149,7 +146,7 @@ export default function TrafikAppManager() {
 
   const getStatusIcon = (status: string) => {
     const Icon = statusIcons[status as keyof typeof statusIcons] || Clock
-    return <Icon className="w-4 h-4" />
+    return React.createElement(Icon, { className: "w-4 h-4" })
   }
 
   if (loading) {
@@ -169,49 +166,49 @@ export default function TrafikAppManager() {
           <p className="text-gray-600">Manage deployment of Dintrafikskola and TrafikApp projects</p>
         </div>
         <div className="flex gap-2">
-          <Button 
+          <button 
             onClick={() => runAction('all', 'sync-all')}
             disabled={actionLoading['all-sync-all']}
-            variant="outline"
+            className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50 flex items-center gap-2"
           >
-            <GitBranch className="w-4 h-4 mr-2" />
+            <GitBranch className="w-4 h-4" />
             Sync All
-          </Button>
-          <Button 
+          </button>
+          <button 
             onClick={() => runAction('all', 'build-all')}
             disabled={actionLoading['all-build-all']}
-            variant="outline"
+            className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50 flex items-center gap-2"
           >
-            <Build className="w-4 h-4 mr-2" />
+            <Hammer className="w-4 h-4" />
             Build All
-          </Button>
-          <Button 
+          </button>
+          <button 
             onClick={() => runAction('all', 'deploy-all')}
             disabled={actionLoading['all-deploy-all']}
-            variant="outline"
+            className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50 flex items-center gap-2"
           >
-            <Rocket className="w-4 h-4 mr-2" />
+            <Rocket className="w-4 h-4" />
             Deploy All
-          </Button>
+          </button>
         </div>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {projects.map((project) => {
+        {projects.map((project: any) => {
           const health = healthStatus[project.name]
           const StatusIcon = getStatusIcon(project.status)
           
           return (
-            <Card key={project.name} className="relative">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">{project.name}</CardTitle>
+            <div key={project.name} className="bg-white border border-gray-200 rounded-lg shadow-sm relative">
+              <div className="p-6 pb-3">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold">{project.name}</h3>
                   <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${statusColors[project.status as keyof typeof statusColors]}`} />
                     <StatusIcon className="w-4 h-4 text-gray-500" />
                   </div>
                 </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600">
+                <div className="flex items-center gap-2 text-sm text-gray-600 mb-4">
                   <Globe className="w-4 h-4" />
                   <a 
                     href={`https://${project.domain}`} 
@@ -222,17 +219,20 @@ export default function TrafikAppManager() {
                     {project.domain}
                   </a>
                   {health && (
-                    <Badge 
-                      variant={health.healthy ? "default" : "destructive"}
-                      className="ml-auto"
+                    <span 
+                      className={`ml-auto px-2 py-1 text-xs rounded-full ${
+                        health.healthy 
+                          ? "bg-green-100 text-green-800" 
+                          : "bg-red-100 text-red-800"
+                      }`}
                     >
                       {health.healthy ? "Healthy" : "Unhealthy"}
-                    </Badge>
+                    </span>
                   )}
                 </div>
-              </CardHeader>
+              </div>
               
-              <CardContent className="space-y-4">
+              <div className="px-6 pb-4 space-y-4">
                 <div className="text-sm space-y-1">
                   <div className="flex justify-between">
                     <span className="text-gray-600">Branch:</span>
@@ -249,9 +249,8 @@ export default function TrafikAppManager() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <button
+                    className="px-3 py-2 text-sm border border-gray-300 rounded hover:bg-gray-50 flex items-center justify-center gap-1"
                     onClick={() => runAction(project.name, 'sync')}
                     disabled={actionLoading[`${project.name}-sync`]}
                   >
@@ -260,26 +259,24 @@ export default function TrafikAppManager() {
                     ) : (
                       <GitBranch className="w-3 h-3" />
                     )}
-                    <span className="ml-1">Sync</span>
-                  </Button>
+                    <span>Sync</span>
+                  </button>
                   
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <button
+                    className="px-3 py-2 text-sm border border-gray-300 rounded hover:bg-gray-50 flex items-center justify-center gap-1"
                     onClick={() => runAction(project.name, 'build')}
                     disabled={actionLoading[`${project.name}-build`]}
                   >
                     {actionLoading[`${project.name}-build`] ? (
                       <RefreshCw className="w-3 h-3 animate-spin" />
                     ) : (
-                      <Build className="w-3 h-3" />
+                      <Hammer className="w-3 h-3" />
                     )}
-                    <span className="ml-1">Build</span>
-                  </Button>
+                    <span>Build</span>
+                  </button>
                   
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <button
+                    className="px-3 py-2 text-sm border border-gray-300 rounded hover:bg-gray-50 flex items-center justify-center gap-1"
                     onClick={() => runAction(project.name, 'deploy')}
                     disabled={actionLoading[`${project.name}-deploy`]}
                   >
@@ -288,11 +285,11 @@ export default function TrafikAppManager() {
                     ) : (
                       <Rocket className="w-3 h-3" />
                     )}
-                    <span className="ml-1">Deploy</span>
-                  </Button>
+                    <span>Deploy</span>
+                  </button>
                   
-                  <Button
-                    size="sm"
+                  <button
+                    className="px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center justify-center gap-1"
                     onClick={() => runPipeline(project.name)}
                     disabled={actionLoading[`${project.name}-pipeline`]}
                   >
@@ -302,24 +299,24 @@ export default function TrafikAppManager() {
                       <Settings className="w-3 h-3 mr-1" />
                     )}
                     Pipeline
-                  </Button>
+                  </button>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           )
         })}
       </div>
 
       {projects.length === 0 && (
-        <Card>
-          <CardContent className="text-center py-8">
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
+          <div className="text-center py-8">
             <Settings className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No Projects Configured</h3>
+           <h3 className="text-lg font-semibold mb-2">No Projects Configured</h3>
             <p className="text-gray-600">
               Configure TrafikApp projects in the configuration file to get started.
             </p>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
     </div>
   )
