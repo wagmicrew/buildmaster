@@ -895,6 +895,164 @@ async def list_available_databases(host: str = "localhost", port: int = 5432,
         }
 
 
+async def renew_ssl_certificate(domain: str = None) -> Dict[str, Any]:
+    """Renew SSL certificate using certbot"""
+    try:
+        # If no domain specified, try to renew all certificates
+        if domain:
+            cmd = ["certbot", "renew", "--cert-name", domain, "--non-interactive"]
+        else:
+            cmd = ["certbot", "renew", "--non-interactive"]
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+        
+        # Check if renewal was successful
+        if result.returncode == 0:
+            # Check if certificates were actually renewed
+            if "no renewals were attempted" in result.stdout.lower() or "not due for renewal" in result.stdout.lower():
+                return {
+                    "success": True,
+                    "message": "Certificates are not due for renewal",
+                    "renewed": False,
+                    "output": result.stdout
+                }
+            else:
+                # Reload nginx after successful renewal
+                reload_result = subprocess.run(
+                    ["systemctl", "reload", "nginx"],
+                    capture_output=True,
+                    text=True
+                )
+                
+                return {
+                    "success": True,
+                    "message": "SSL certificate renewed successfully",
+                    "renewed": True,
+                    "nginx_reloaded": reload_result.returncode == 0,
+                    "output": result.stdout
+                }
+        else:
+            return {
+                "success": False,
+                "error": "Certificate renewal failed",
+                "output": result.stderr or result.stdout
+            }
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "error": "Certificate renewal timed out after 5 minutes"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+async def get_certificate_details(cert_path: str) -> Dict[str, Any]:
+    """Get detailed certificate information"""
+    try:
+        if not os.path.exists(cert_path):
+            return {"success": False, "error": f"Certificate file not found: {cert_path}"}
+        
+        # Get certificate details
+        result = subprocess.run(
+            ["openssl", "x509", "-in", cert_path, "-noout", "-text"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode != 0:
+            return {"success": False, "error": "Failed to parse certificate"}
+        
+        cert_text = result.stdout
+        
+        # Parse certificate information
+        cert_info = {
+            "subject": "",
+            "issuer": "",
+            "version": "",
+            "serial_number": "",
+            "signature_algorithm": "",
+            "not_before": "",
+            "not_after": "",
+            "domains": [],
+            "fingerprint": ""
+        }
+        
+        # Extract subject
+        for line in cert_text.split('\n'):
+            line = line.strip()
+            if line.startswith('Subject:'):
+                cert_info["subject"] = line.replace('Subject:', '').strip()
+            elif line.startswith('Issuer:'):
+                cert_info["issuer"] = line.replace('Issuer:', '').strip()
+            elif line.startswith('Version:'):
+                cert_info["version"] = line.replace('Version:', '').strip()
+            elif line.startswith('Serial Number:'):
+                cert_info["serial_number"] = line.replace('Serial Number:', '').strip()
+            elif line.startswith('Signature Algorithm:'):
+                cert_info["signature_algorithm"] = line.replace('Signature Algorithm:', '').strip()
+            elif line.startswith('Not Before:'):
+                cert_info["not_before"] = line.replace('Not Before:', '').strip()
+            elif line.startswith('Not After:'):
+                cert_info["not_after"] = line.replace('Not After:', '').strip()
+        
+        # Extract domains from Subject Alternative Name
+        for line in cert_text.split('\n'):
+            if 'X509v3 Subject Alternative Name:' in line:
+                san_line = line.strip()
+                # Extract domains from SAN extension
+                if 'DNS:' in san_line:
+                    domains_part = san_line.split('DNS:')[1]
+                    domains = [d.strip().rstrip(',') for d in domains_part.split(',')]
+                    cert_info["domains"] = [d for d in domains if d]
+                break
+        
+        # Get fingerprint
+        fingerprint_result = subprocess.run(
+            ["openssl", "x509", "-in", cert_path, "-noout", "-fingerprint", "-sha256"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if fingerprint_result.returncode == 0:
+            for line in fingerprint_result.stdout.split('\n'):
+                if line.startswith('SHA256 Fingerprint='):
+                    cert_info["fingerprint"] = line.replace('SHA256 Fingerprint=', '').strip()
+                    break
+        
+        # Calculate days until expiry
+        if cert_info["not_after"]:
+            try:
+                from datetime import datetime
+                expiry_date = datetime.strptime(cert_info["not_after"], "%b %d %H:%M:%S %Y %Z")
+                days_until_expiry = (expiry_date - datetime.now()).days
+                cert_info["days_until_expiry"] = days_until_expiry
+                cert_info["is_expiring_soon"] = days_until_expiry <= 30
+            except:
+                cert_info["days_until_expiry"] = None
+                cert_info["is_expiring_soon"] = False
+        
+        return {
+            "success": True,
+            "certificate": cert_info,
+            "path": cert_path
+        }
+        
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Certificate analysis timed out"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 async def read_env_database_settings(dev_path: str, prod_path: str) -> Dict[str, Any]:
     """Read database settings from both dev and prod .env files"""
     dev_config = await read_database_from_env(dev_path)

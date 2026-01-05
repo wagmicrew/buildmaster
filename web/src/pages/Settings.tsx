@@ -278,6 +278,32 @@ export default function Settings() {
     }
   })
 
+  // SSL Certificates
+  const { data: sslCertificates, refetch: refetchSslCertificates } = useQuery({
+    queryKey: ['ssl-certificates'],
+    queryFn: async () => {
+      const response = await api.get('/nginx/ssl-certificates')
+      return response.data
+    },
+    enabled: activeTab === 'nginx'
+  })
+
+  // Certificate renewal mutation
+  const renewCertificateMutation = useMutation({
+    mutationFn: async (domain?: string) => {
+      const response = await api.post('/nginx/ssl-renew', domain ? { domain } : {})
+      return response.data
+    },
+    onSuccess: () => {
+      refetchSslCertificates()
+    }
+  })
+
+  // Certificate details state
+  const [selectedCertificate, setSelectedCertificate] = useState<any>(null)
+  const [certificateDetails, setCertificateDetails] = useState<any>(null)
+  const [showCertificateDetails, setShowCertificateDetails] = useState(false)
+
   // Read database config from .env files
   const { data: envDatabaseConfig, refetch: refetchEnvDb } = useQuery({
     queryKey: ['env-database-config'],
@@ -446,6 +472,37 @@ export default function Settings() {
 
   const togglePasswordVisibility = (key: string) => {
     setShowPasswords(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  // Certificate management functions
+  const handleRenewCertificate = (domain?: string) => {
+    renewCertificateMutation.mutate(domain)
+  }
+
+  const handleViewCertificateDetails = async (certPath: string) => {
+    try {
+      const response = await api.get('/nginx/ssl-details', { 
+        params: { cert_path: certPath } 
+      })
+      setCertificateDetails(response.data)
+      setShowCertificateDetails(true)
+    } catch (error) {
+      console.error('Failed to fetch certificate details:', error)
+    }
+  }
+
+  const formatDate = (dateString: string) => {
+    try {
+      return new Date(dateString).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    } catch {
+      return dateString
+    }
   }
 
   // ============= BUILDMASTER STATE & QUERIES =============
@@ -1730,6 +1787,157 @@ export default function Settings() {
           )}
         </div>
       </div>
+
+      {/* SSL Certificate Management */}
+      <div className="glass rounded-xl p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+            <Upload className="text-green-400" size={20} />
+            SSL Certificate Management
+          </h3>
+          <button
+            onClick={() => refetchSslCertificates()}
+            className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm transition-colors flex items-center gap-2"
+          >
+            <RefreshCw size={14} />
+            Refresh
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          {/* Renew All Certificates */}
+          <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-green-300 font-medium mb-1">Renew All Certificates</div>
+                <p className="text-sm text-green-200/70">
+                  Renew all SSL certificates that are due for renewal
+                </p>
+              </div>
+              <button
+                onClick={() => handleRenewCertificate()}
+                disabled={renewCertificateMutation.isPending}
+                className="px-4 py-2 bg-green-500 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm transition-colors flex items-center gap-2"
+              >
+                {renewCertificateMutation.isPending ? (
+                  <Loader className="animate-spin" size={14} />
+                ) : (
+                  <RotateCw size={14} />
+                )}
+                Renew All
+              </button>
+            </div>
+          </div>
+
+          {/* Available Certificates */}
+          {sslCertificates?.certificates?.length > 0 && (
+            <div className="space-y-3">
+              <h4 className="text-lg font-medium text-white">Available Certificates</h4>
+              {sslCertificates.certificates.map((cert: any, idx: number) => (
+                <div key={idx} className="p-4 bg-black/30 border border-white/10 rounded-lg">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <div className="text-white font-medium">{cert.domain}</div>
+                      <div className="text-sm text-slate-400">
+                        {cert.info?.subject || 'No subject info'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleViewCertificateDetails(cert.cert_path)}
+                        className="px-3 py-1 bg-slate-600 hover:bg-slate-500 text-white rounded text-sm transition-colors flex items-center gap-1"
+                      >
+                        <Eye size={12} />
+                        Details
+                      </button>
+                      <button
+                        onClick={() => handleRenewCertificate(cert.domain)}
+                        disabled={renewCertificateMutation.isPending}
+                        className="px-3 py-1 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded text-sm transition-colors flex items-center gap-1"
+                      >
+                        {renewCertificateMutation.isPending ? (
+                          <Loader className="animate-spin" size={12} />
+                        ) : (
+                          <RotateCw size={12} />
+                        )}
+                        Renew
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {cert.info && (
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="text-slate-400">Valid From:</span>
+                        <div className="text-white">{formatDate(cert.info.notBefore)}</div>
+                      </div>
+                      <div>
+                        <span className="text-slate-400">Expires:</span>
+                        <div className={`text-white ${
+                          cert.info.days_until_expiry !== undefined && cert.info.days_until_expiry <= 30 
+                            ? 'text-yellow-400 font-medium' 
+                            : ''
+                        }`}>
+                          {formatDate(cert.info.notAfter)}
+                          {cert.info.days_until_expiry !== undefined && (
+                            <span className="ml-2 text-xs">
+                              ({cert.info.days_until_expiry} days)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {sslCertificates?.certificates?.length === 0 && (
+            <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="text-yellow-400 mt-0.5" size={20} />
+                <div>
+                  <div className="text-yellow-300 font-medium mb-1">No SSL Certificates Found</div>
+                  <p className="text-sm text-yellow-200/70">
+                    No SSL certificates were found in /etc/letsencrypt/live/. 
+                    Use certbot to obtain SSL certificates for your domains.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Renewal Status */}
+          {renewCertificateMutation.data && (
+            <div className={`p-4 border rounded-lg ${
+              renewCertificateMutation.data.success 
+                ? 'bg-green-500/10 border-green-500/30' 
+                : 'bg-red-500/10 border-red-500/30'
+            }`}>
+              <div className="flex items-start gap-3">
+                {renewCertificateMutation.data.success ? (
+                  <CheckCircle className="text-green-400 mt-0.5" size={20} />
+                ) : (
+                  <XCircle className="text-red-400 mt-0.5" size={20} />
+                )}
+                <div>
+                  <div className={`font-medium mb-1 ${
+                    renewCertificateMutation.data.success ? 'text-green-300' : 'text-red-300'
+                  }`}>
+                    {renewCertificateMutation.data.message}
+                  </div>
+                  {renewCertificateMutation.data.output && (
+                    <div className="text-sm text-slate-400 font-mono bg-black/50 p-2 rounded mt-2">
+                      {renewCertificateMutation.data.output}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 
@@ -2443,6 +2651,130 @@ export default function Settings() {
           {renderContent()}
         </div>
       </div>
+
+      {/* Certificate Details Modal */}
+      {showCertificateDetails && certificateDetails && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 rounded-xl p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto border border-white/10">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-semibold text-white flex items-center gap-2">
+                <Eye className="text-blue-400" size={20} />
+                Certificate Details
+              </h3>
+              <button
+                onClick={() => setShowCertificateDetails(false)}
+                className="p-2 text-slate-400 hover:text-white transition-colors"
+              >
+                <XCircle size={20} />
+              </button>
+            </div>
+
+            {certificateDetails.success ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-black/30 rounded-lg">
+                    <div className="text-sm text-slate-400 mb-1">Subject</div>
+                    <div className="text-white font-mono text-sm break-all">
+                      {certificateDetails.certificate.subject}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-black/30 rounded-lg">
+                    <div className="text-sm text-slate-400 mb-1">Issuer</div>
+                    <div className="text-white font-mono text-sm break-all">
+                      {certificateDetails.certificate.issuer}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-black/30 rounded-lg">
+                    <div className="text-sm text-slate-400 mb-1">Valid From</div>
+                    <div className="text-white">
+                      {formatDate(certificateDetails.certificate.not_before)}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-black/30 rounded-lg">
+                    <div className="text-sm text-slate-400 mb-1">Expires</div>
+                    <div className={`text-white ${
+                      certificateDetails.certificate.is_expiring_soon 
+                        ? 'text-yellow-400 font-medium' 
+                        : ''
+                    }`}>
+                      {formatDate(certificateDetails.certificate.not_after)}
+                      {certificateDetails.certificate.days_until_expiry !== undefined && (
+                        <span className="ml-2 text-xs">
+                          ({certificateDetails.certificate.days_until_expiry} days)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-black/30 rounded-lg">
+                    <div className="text-sm text-slate-400 mb-1">Version</div>
+                    <div className="text-white">{certificateDetails.certificate.version}</div>
+                  </div>
+                  <div className="p-3 bg-black/30 rounded-lg">
+                    <div className="text-sm text-slate-400 mb-1">Serial Number</div>
+                    <div className="text-white font-mono text-sm">
+                      {certificateDetails.certificate.serial_number}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-black/30 rounded-lg">
+                  <div className="text-sm text-slate-400 mb-1">Signature Algorithm</div>
+                  <div className="text-white font-mono text-sm">
+                    {certificateDetails.certificate.signature_algorithm}
+                  </div>
+                </div>
+
+                {certificateDetails.certificate.domains.length > 0 && (
+                  <div className="p-3 bg-black/30 rounded-lg">
+                    <div className="text-sm text-slate-400 mb-1">Domains (SAN)</div>
+                    <div className="space-y-1">
+                      {certificateDetails.certificate.domains.map((domain: string, idx: number) => (
+                        <div key={idx} className="text-white font-mono text-sm">
+                          {domain}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {certificateDetails.certificate.fingerprint && (
+                  <div className="p-3 bg-black/30 rounded-lg">
+                    <div className="text-sm text-slate-400 mb-1">SHA256 Fingerprint</div>
+                    <div className="text-white font-mono text-sm break-all">
+                      {certificateDetails.certificate.fingerprint}
+                    </div>
+                  </div>
+                )}
+
+                <div className="p-3 bg-black/30 rounded-lg">
+                  <div className="text-sm text-slate-400 mb-1">Certificate Path</div>
+                  <div className="text-white font-mono text-sm break-all">
+                    {certificateDetails.path}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+                <div className="flex items-start gap-3">
+                  <XCircle className="text-red-400 mt-0.5" size={20} />
+                  <div>
+                    <div className="text-red-300 font-medium mb-1">Error</div>
+                    <p className="text-sm text-red-200/70">
+                      {certificateDetails.error}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

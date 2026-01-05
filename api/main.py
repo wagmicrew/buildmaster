@@ -75,6 +75,8 @@ from settings_ops import (
     write_nginx_config,
     autofix_nginx_for_nextjs,
     discover_ssl_certificates,
+    renew_ssl_certificate,
+    get_certificate_details,
     test_database_connection,
     read_env_database_settings,
     list_available_databases,
@@ -3399,6 +3401,39 @@ async def ssl_certificates_endpoint(
     """Discover available SSL certificates"""
     try:
         result = await discover_ssl_certificates()
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post("/api/nginx/ssl-renew", response_model=dict)
+async def ssl_renew_endpoint(
+    payload: dict = None,
+    email: str = Depends(verify_session_token)
+):
+    """Renew SSL certificates"""
+    try:
+        domain = payload.get("domain") if payload else None
+        result = await renew_ssl_certificate(domain)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/nginx/ssl-details", response_model=dict)
+async def ssl_details_endpoint(
+    cert_path: str,
+    email: str = Depends(verify_session_token)
+):
+    """Get detailed SSL certificate information"""
+    try:
+        result = await get_certificate_details(cert_path)
         return result
     except Exception as e:
         raise HTTPException(
