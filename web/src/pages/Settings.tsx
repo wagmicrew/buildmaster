@@ -282,7 +282,7 @@ export default function Settings() {
   const { data: sslCertificates, refetch: refetchSslCertificates } = useQuery({
     queryKey: ['ssl-certificates'],
     queryFn: async () => {
-      const response = await api.get('/nginx/ssl-certificates')
+      const response = await api.get('/api/nginx/ssl-certificates')
       return response.data
     },
     enabled: activeTab === 'nginx'
@@ -291,7 +291,7 @@ export default function Settings() {
   // Certificate renewal mutation
   const renewCertificateMutation = useMutation({
     mutationFn: async (domain?: string) => {
-      const response = await api.post('/nginx/ssl-renew', domain ? { domain } : {})
+      const response = await api.post('/api/nginx/ssl-renew', domain ? { domain } : {})
       return response.data
     },
     onSuccess: () => {
@@ -481,7 +481,7 @@ export default function Settings() {
 
   const handleViewCertificateDetails = async (certPath: string) => {
     try {
-      const response = await api.get('/nginx/ssl-details', { 
+      const response = await api.get('/api/nginx/ssl-details', { 
         params: { cert_path: certPath } 
       })
       setCertificateDetails(response.data)
