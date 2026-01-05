@@ -28,11 +28,12 @@ import {
   Trash2,
   Download,
   RotateCw,
-  Upload
+  Upload,
+  Shield
 } from 'lucide-react'
 import NginxEditor from '../components/NginxEditor'
 
-type SettingsTab = 'development' | 'production' | 'database' | 'build' | 'pm2' | 'nginx' | 'server' | 'buildmaster'
+type SettingsTab = 'development' | 'production' | 'database' | 'build' | 'pm2' | 'nginx' | 'certificates' | 'server' | 'buildmaster'
 
 interface AppSettings {
   development: {
@@ -213,6 +214,7 @@ const menuItems = [
   { id: 'build' as SettingsTab, label: 'Build Engine', icon: Play, description: 'Build scripts & configuration' },
   { id: 'pm2' as SettingsTab, label: 'PM2', icon: Box, description: 'Process manager settings' },
   { id: 'nginx' as SettingsTab, label: 'Nginx', icon: Globe, description: 'Web server configuration' },
+  { id: 'certificates' as SettingsTab, label: 'Certificates', icon: Shield, description: 'SSL certificate management' },
   { id: 'server' as SettingsTab, label: 'Server', icon: Package, description: 'Packages & system updates' },
   { id: 'buildmaster' as SettingsTab, label: 'BuildMaster', icon: Wrench, description: 'Self-update & access control' }
 ]
@@ -1581,6 +1583,195 @@ export default function Settings() {
     </div>
   )
 
+  const renderCertificatesSettings = () => (
+    <div className="space-y-6">
+      {/* SSL Certificate Management */}
+      <div className="glass rounded-xl p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+            <Shield className="text-green-400" size={20} />
+            SSL Certificate Management
+          </h3>
+          <button
+            onClick={() => refetchSslCertificates()}
+            className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm transition-colors flex items-center gap-2"
+          >
+            <RefreshCw size={14} />
+            Refresh
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          {/* Renew All Certificates */}
+          <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-white font-medium flex items-center gap-2">
+                  <RotateCw className="text-green-400" size={16} />
+                  Renew All Certificates
+                </h4>
+                <p className="text-slate-400 text-sm mt-1">
+                  Renew all available SSL certificates using certbot
+                </p>
+              </div>
+              <button
+                onClick={() => handleRenewCertificate()}
+                disabled={renewCertificateMutation.isPending}
+                className="px-4 py-2 bg-green-500 hover:bg-green-600 disabled:bg-green-800 disabled:opacity-50 text-white rounded-lg transition-colors flex items-center gap-2"
+              >
+                {renewCertificateMutation.isPending ? (
+                  <Loader className="animate-spin" size={16} />
+                ) : (
+                  <RotateCw size={16} />
+                )}
+                Renew All
+              </button>
+            </div>
+          </div>
+
+          {/* Certificate List */}
+          {sslCertificates?.success && sslCertificates.certificates.length > 0 ? (
+            <div className="space-y-3">
+              <h4 className="text-white font-medium">Available Certificates</h4>
+              {sslCertificates.certificates.map((cert: any, idx: number) => (
+                <div key={idx} className="p-4 bg-black/30 rounded-lg border border-white/10">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Globe className="text-blue-400" size={16} />
+                        <span className="text-white font-medium">{cert.domain}</span>
+                        {cert.info?.notAfter && (
+                          <span className={`text-xs px-2 py-1 rounded ${
+                            new Date(cert.info.notAfter) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+                              ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                              : 'bg-green-500/20 text-green-300 border border-green-500/30'
+                          }`}>
+                            {new Date(cert.info.notAfter) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) ? 'Expiring Soon' : 'Valid'}
+                          </span>
+                        )}
+                      </div>
+                      
+                      {cert.info?.subject && (
+                        <div className="text-slate-400 text-sm mb-1">
+                          Subject: {cert.info.subject}
+                        </div>
+                      )}
+                      
+                      {cert.info?.notAfter && (
+                        <div className="text-slate-400 text-sm">
+                          Expires: {formatDate(cert.info.notAfter)}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleViewCertificateDetails(cert.cert_path)}
+                        className="px-3 py-1 bg-slate-600 hover:bg-slate-500 text-white rounded text-sm transition-colors flex items-center gap-1"
+                      >
+                        <Eye size={12} />
+                        Details
+                      </button>
+                      <button
+                        onClick={() => handleRenewCertificate(cert.domain)}
+                        disabled={renewCertificateMutation.isPending}
+                        className="px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:opacity-50 text-white rounded text-sm transition-colors flex items-center gap-1"
+                      >
+                        {renewCertificateMutation.isPending ? (
+                          <Loader className="animate-spin" size={12} />
+                        ) : (
+                          <RotateCw size={12} />
+                        )}
+                        Renew
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-4 bg-slate-500/10 border border-slate-500/30 rounded-lg">
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="text-slate-400" size={20} />
+                <div>
+                  <p className="text-slate-300 font-medium">No SSL certificates found</p>
+                  <p className="text-slate-400 text-sm mt-1">
+                    No Let's Encrypt certificates were discovered in /etc/letsencrypt/live/
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Renewal Status */}
+          {renewCertificateMutation.data && (
+            <div className={`p-4 rounded-lg border ${
+              renewCertificateMutation.data.success
+                ? 'bg-green-500/10 border-green-500/30'
+                : 'bg-red-500/10 border-red-500/30'
+            }`}>
+              <div className="flex items-start gap-3">
+                {renewCertificateMutation.data.success ? (
+                  <CheckCircle className="text-green-400 mt-0.5" size={20} />
+                ) : (
+                  <XCircle className="text-red-400 mt-0.5" size={20} />
+                )}
+                <div>
+                  <div className={`font-medium mb-1 ${
+                    renewCertificateMutation.data.success ? 'text-green-300' : 'text-red-300'
+                  }`}>
+                    {renewCertificateMutation.data.success ? 'Renewal Successful' : 'Renewal Failed'}
+                  </div>
+                  {renewCertificateMutation.data.output && (
+                    <pre className="text-xs text-slate-300 whitespace-pre-wrap">
+                      {renewCertificateMutation.data.output}
+                    </pre>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Certificate Management Information */}
+      <div className="glass rounded-xl p-6">
+        <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <Settings2 className="text-blue-400" size={20} />
+          Certificate Management
+        </h3>
+        
+        <div className="space-y-4">
+          <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+            <h4 className="text-blue-300 font-medium mb-2">About SSL Certificates</h4>
+            <p className="text-slate-300 text-sm">
+              This system manages Let's Encrypt SSL certificates automatically. Certificates are discovered from 
+              /etc/letsencrypt/live/ and can be renewed individually or all at once.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-4 bg-slate-500/10 border border-slate-500/30 rounded-lg">
+              <h4 className="text-slate-300 font-medium mb-2">Automatic Renewal</h4>
+              <p className="text-slate-400 text-sm">
+                Certificates can be renewed automatically using certbot. The system will also reload 
+                nginx after successful renewal.
+              </p>
+            </div>
+
+            <div className="p-4 bg-slate-500/10 border border-slate-500/30 rounded-lg">
+              <h4 className="text-slate-300 font-medium mb-2">Certificate Details</h4>
+              <p className="text-slate-400 text-sm">
+                Click "Details" on any certificate to view comprehensive information including 
+                domains, expiry dates, and security details.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
   const renderNginxSettings = () => (
     <div className="space-y-6">
       {/* Nginx Editor with Autofix */}
@@ -2549,6 +2740,7 @@ export default function Settings() {
       case 'build': return renderBuildSettings()
       case 'pm2': return renderPM2Settings()
       case 'nginx': return renderNginxSettings()
+      case 'certificates': return renderCertificatesSettings()
       case 'server': return renderServerSettings()
       case 'buildmaster': return renderBuildMasterSettings()
       default: return null
